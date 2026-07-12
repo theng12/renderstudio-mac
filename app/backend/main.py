@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from .fleet_auth import load_token, make_middleware
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(os.environ.get("RENDERSTUDIO_DATA_DIR", ROOT / "data")).resolve()
 OBJECTS = DATA / "cache" / "objects"

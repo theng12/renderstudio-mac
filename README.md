@@ -11,6 +11,11 @@ the completed video, and exposes the result for return to Story Studio.
 2. Select **Start** and leave the worker running.
 3. In Studio Hub, discover or register the Mac's `render` studio on port 47874.
 
+For dedicated workers, select **Install as Startup Service** after the normal
+Install step. Render Studio will start automatically when that Mac logs in,
+restart after crashes, and run a health watchdog every minute. Service mode and
+Pinokio's manual Start are mutually exclusive because both use port 47874.
+
 Jobs never preempt one another. Studio Hub grants one heavy-work lease per Mac,
 so Image Studio and Render Studio take turns without being stopped mid-job.
 

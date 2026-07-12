@@ -31,6 +31,12 @@ module.exports = {
       }
     },
     {
+      when: "{{exists('service/.installed')}}",
+      method: "shell.run",
+      params: { message: "bash install_service.sh" }
+    },
+    {
+      when: "{{!exists('service/.installed')}}",
       method: "script.start",
       params: { uri: "start.js" }
     }

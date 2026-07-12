@@ -2,6 +2,7 @@
   "version": "3.6",
   "title": "Render Studio KH",
   "description": "Episode-level local render worker managed by Studio Hub KH.",
+  "icon": "icon.png",
   "platform": ["darwin"],
   "links": { "documentation": "README.md" },
   "tags": ["ffmpeg", "render", "video", "story-studio", "apple-silicon"]
