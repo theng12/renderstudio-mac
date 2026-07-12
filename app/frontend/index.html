@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Render Studio KH</title>
+  <style>
+    :root{--ink:#17211b;--paper:#f2efe4;--card:#fffdf6;--green:#246447;--line:#c8c2ae;--gold:#c28b2c}
+    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:radial-gradient(circle at 85% 0,#d8e4d2 0,transparent 34%),var(--paper);font:16px/1.5 Georgia,serif}
+    main{max-width:920px;margin:0 auto;padding:64px 24px}.eyebrow{font:700 12px/1.2 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--green)}
+    h1{font-size:clamp(42px,8vw,76px);line-height:.92;margin:14px 0 22px;max-width:760px}.lead{font-size:20px;max-width:650px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:44px}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 10px 30px #3b463415}
+    .value{font:700 24px/1.2 ui-monospace,monospace;margin-top:8px}.ok{color:var(--green)}.warn{color:#9a3d28}
+    footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:#625f54}
+    @media(max-width:650px){main{padding-top:40px}.grid{grid-template-columns:1fr}h1{font-size:48px}}
+  </style>
+</head>
+<body><main><div class="eyebrow">Story Studio Fleet</div><h1>Quiet power for the final cut.</h1><p class="lead">This Mac accepts complete episode renders from Studio Hub, works from verified local copies, and returns only validated video.</p><section class="grid"><div class="card"><div>Worker</div><div id="state" class="value">Checking</div></div><div class="card"><div>Hardware</div><div id="hardware" class="value">...</div></div><div class="card"><div>Encoder</div><div id="encoder" class="value">...</div></div></section><footer>Jobs are never interrupted by new image work. Studio Hub waits until this Mac is available.</footer></main><script>async function refresh(){try{const r=await fetch('/api/health'),h=await r.json();state.textContent=h.busy?'Rendering':'Ready';state.className='value '+(h.ok?'ok':'warn');hardware.textContent=`${h.chip} · ${h.memory_gb} GB`;encoder.textContent=h.videotoolbox?'VideoToolbox':'CPU fallback'}catch{state.textContent='Offline';state.className='value warn'}}refresh();setInterval(refresh,3000)</script></body></html>

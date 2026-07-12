@@ -1,0 +1,65 @@
+"""Shared KH Studio fleet-token authentication."""
+
+from __future__ import annotations
+
+import os
+import secrets
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
+API_ROOT = LAUNCHER_ROOT.parent
+HUB_TOKEN_FILE = API_ROOT / "studiohub-mac" / ".fleet_token"
+SHARED_TOKEN_FILE = API_ROOT / ".kh_studio_token"
+PUBLIC_PATHS = {"/", "/api/health", "/api/version", "/api/capabilities"}
+
+
+def _read_private(path: Path) -> str | None:
+    try:
+        if path.exists():
+            os.chmod(path, 0o600)
+            return path.read_text().strip() or None
+    except OSError:
+        return None
+    return None
+
+
+def load_token() -> str:
+    env = os.environ.get("KH_STUDIO_TOKEN") or os.environ.get("STUDIOHUB_FLEET_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    for path in (HUB_TOKEN_FILE, SHARED_TOKEN_FILE):
+        token = _read_private(path)
+        if token:
+            return token
+    token = secrets.token_urlsafe(24)
+    SHARED_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(SHARED_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(token + "\n")
+    except FileExistsError:
+        token = _read_private(SHARED_TOKEN_FILE) or token
+    os.chmod(SHARED_TOKEN_FILE, 0o600)
+    return token
+
+
+def make_middleware(token: str):
+    async def middleware(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and origin:
+            if urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
+                return JSONResponse({"detail": "Cross-origin browser writes are not allowed."}, 403)
+        host = request.client.host if request.client else ""
+        if (request.url.path in PUBLIC_PATHS or request.method == "OPTIONS"
+                or host in {"127.0.0.1", "::1", "localhost"}):
+            return await call_next(request)
+        offered = (request.headers.get("x-studio-token")
+                   or request.headers.get("x-hub-token"))
+        if offered and secrets.compare_digest(offered, token):
+            return await call_next(request)
+        return JSONResponse({"detail": "Fleet token required for remote Studio access."}, 401)
+    return middleware
