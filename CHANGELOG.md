@@ -1,5 +1,18 @@
 # Render Studio KH Changelog
 
+## 0.3.0 - 2026-07-12
+
+- Added separate worker-online and authenticated Studio Hub connection status,
+  including latency, Hub version, last check time, and a manual connection test.
+- Added live current-episode progress and a durable recent render history.
+- Added lifetime completed episodes, worker time, average render time, finished
+  video duration and bytes, success rate, failures, acknowledgements, retained
+  copies, and encoder-use totals.
+- Added hardware, service uptime, queue, disk, cache, and output-storage details.
+- Added editable Hub address, retention, and free-disk reserve settings.
+- Added an in-app What's New view and regression coverage for reporting and
+  authenticated Hub testing.
+
 ## 0.2.0 - 2026-07-12
 
 - Added a dedicated Render Studio application icon.

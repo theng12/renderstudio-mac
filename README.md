@@ -19,6 +19,19 @@ Pinokio's manual Start are mutually exclusive because both use port 47874.
 Jobs never preempt one another. Studio Hub grants one heavy-work lease per Mac,
 so Image Studio and Render Studio take turns without being stopped mid-job.
 
+## Dashboard
+
+The Render Studio page separates worker health from Studio Hub connectivity and
+includes a manual authenticated connection test. It shows the active episode,
+queue, hardware, encoder, uptime, disk use, recent render history, and durable
+lifetime totals. Historical totals remain available after acknowledged local
+copies reach their retention date and are removed.
+
+The Studio Hub address defaults to `http://127.0.0.1:47873`. Set it to the LAN
+or Tailscale address of the scheduling Hub when the worker uses a remote Hub.
+The dashboard also controls the verified-copy retention period and minimum free
+disk reserve.
+
 ## Safety
 
 - Only FFmpeg and FFprobe steps are accepted; shell commands are never run.
@@ -30,8 +43,10 @@ so Image Studio and Render Studio take turns without being stopped mid-job.
 
 ## API
 
-`GET /api/health` reports availability, hardware score, encoder support, and
-queue depth. `GET /api/catalog` advertises `episode-assembly-v1`.
+`GET /api/health` reports availability, hardware score, encoder support, queue
+depth, and service uptime. `GET /api/dashboard` returns sanitized work history,
+lifetime totals, storage, connection state, and settings. `GET /api/catalog`
+advertises `episode-assembly-v1`.
 
 Submit a render with `POST /api/generate/render`:
 

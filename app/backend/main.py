@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from .fleet_auth import load_token, make_middleware
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(os.environ.get("RENDERSTUDIO_DATA_DIR", ROOT / "data")).resolve()
 OBJECTS = DATA / "cache" / "objects"
@@ -49,6 +49,10 @@ tasks: dict[str, asyncio.Task] = {}
 worker_lock = asyncio.Lock()
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 RETENTION_CHOICES = {1, 3, 7, 15, 30}
+DEFAULT_HUB_URL = "http://127.0.0.1:47873"
+connection_cache: dict = {"checked_at": 0.0, "ok": False, "status": "not_tested"}
+storage_cache: dict = {"checked_at": 0.0}
+PROCESS_STARTED_AT = time.time()
 
 
 class RenderRequest(BaseModel):
@@ -60,10 +64,20 @@ class RenderRequest(BaseModel):
 class SettingsRequest(BaseModel):
     retention_days: int | None = Field(default=7)
     minimum_free_gb: int = Field(default=20, ge=1, le=1000)
+    hub_url: str = DEFAULT_HUB_URL
+
+
+def _normalise_hub_url(value: str) -> str:
+    parsed = urlparse((value or "").strip())
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment):
+        raise ValueError("Studio Hub URL must be a plain http(s) address")
+    return (value or "").strip().rstrip("/")
 
 
 def _load_settings() -> dict:
-    defaults = {"retention_days": 7, "minimum_free_gb": 20}
+    defaults = {"retention_days": 7, "minimum_free_gb": 20,
+                "hub_url": DEFAULT_HUB_URL}
     try:
         value = json.loads(SETTINGS_FILE.read_text())
         defaults.update(value)
@@ -71,7 +85,141 @@ def _load_settings() -> dict:
         pass
     if defaults["retention_days"] not in RETENTION_CHOICES | {None}:
         defaults["retention_days"] = 7
+    try:
+        defaults["hub_url"] = _normalise_hub_url(defaults["hub_url"])
+    except (TypeError, ValueError):
+        defaults["hub_url"] = DEFAULT_HUB_URL
     return defaults
+
+
+def _folder_bytes(path: Path) -> int:
+    total = 0
+    try:
+        for item in path.rglob("*"):
+            if item.is_file():
+                total += item.stat().st_size
+    except OSError:
+        pass
+    return total
+
+
+def _storage_snapshot(now: float) -> dict:
+    if now - float(storage_cache.get("checked_at", 0)) < 30:
+        return {key: value for key, value in storage_cache.items() if key != "checked_at"}
+    disk = psutil.disk_usage(DATA)
+    value = {
+        "data_bytes": _folder_bytes(DATA), "cache_bytes": _folder_bytes(OBJECTS),
+        "outputs_bytes": _folder_bytes(OUTPUTS), "free_bytes": disk.free,
+        "total_bytes": disk.total,
+    }
+    storage_cache.clear()
+    storage_cache.update(checked_at=now, **value)
+    return value
+
+
+def _elapsed(job: dict, now: float) -> float:
+    if job.get("duration_seconds") is not None:
+        return max(0.0, float(job["duration_seconds"]))
+    started = job.get("started_at")
+    if not started:
+        return 0.0
+    return max(0.0, float(job.get("finished_at") or now) - float(started))
+
+
+def _video_duration(job: dict) -> float:
+    try:
+        return max(0.0, float(job.get("media", {}).get("format", {}).get("duration", 0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _job_summary(job: dict, now: float) -> dict:
+    output_path = job.get("output_path")
+    return {
+        "id": job.get("id"), "label": job.get("label") or "Untitled episode",
+        "state": job.get("state", "unknown"),
+        "progress": round(float(job.get("progress") or 0), 4),
+        "created_at": job.get("created_at"), "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"), "duration_seconds": _elapsed(job, now),
+        "video_seconds": _video_duration(job), "bytes": int(job.get("bytes") or 0),
+        "encoder": job.get("encoder"), "sha256": job.get("sha256"),
+        "acknowledged": bool(job.get("acked_at")), "pinned": bool(job.get("pinned")),
+        "retained": bool(output_path and Path(output_path).is_file()),
+        "error": job.get("error"),
+    }
+
+
+def _dashboard_snapshot() -> dict:
+    now = time.time()
+    ordered = sorted(jobs.values(), key=lambda item: item.get("created_at", 0), reverse=True)
+    summaries = [_job_summary(job, now) for job in ordered]
+    completed = [item for item in summaries if item["state"] in {"done", "purged"}]
+    failed = [item for item in summaries if item["state"] == "error"]
+    cancelled = [item for item in summaries if item["state"] == "cancelled"]
+    active = next((item for item in summaries if item["state"] == "running"), None)
+    queued = [item for item in summaries if item["state"] == "queued"]
+    attempts = len(completed) + len(failed)
+    completed_seconds = sum(item["duration_seconds"] for item in completed)
+    encoders: dict[str, int] = {}
+    for item in completed:
+        name = item["encoder"] or "unknown"
+        encoders[name] = encoders.get(name, 0) + 1
+    return {
+        "version": VERSION,
+        "now": now,
+        "current": active or (queued[0] if queued else None),
+        "recent": summaries[:25],
+        "totals": {
+            "jobs": len(summaries), "completed": len(completed),
+            "failed": len(failed), "cancelled": len(cancelled),
+            "queued": len(queued), "running": 1 if active else 0,
+            "acknowledged": sum(1 for item in completed if item["acknowledged"]),
+            "retained": sum(1 for item in completed if item["retained"]),
+            "render_seconds": sum(item["duration_seconds"] for item in summaries),
+            "completed_render_seconds": completed_seconds,
+            "average_render_seconds": completed_seconds / len(completed) if completed else 0,
+            "video_seconds": sum(item["video_seconds"] for item in completed),
+            "output_bytes": sum(item["bytes"] for item in completed),
+            "success_rate": (len(completed) / attempts * 100) if attempts else None,
+            "first_job_at": min((item["created_at"] for item in summaries if item["created_at"]), default=None),
+            "last_job_at": max((item["created_at"] for item in summaries if item["created_at"]), default=None),
+            "encoders": encoders,
+        },
+        "storage": _storage_snapshot(now),
+        "settings": _load_settings(),
+    }
+
+
+async def _test_hub_connection(force: bool = False) -> dict:
+    now = time.time()
+    if not force and now - float(connection_cache.get("checked_at", 0)) < 15:
+        return dict(connection_cache)
+    hub_url = _load_settings()["hub_url"]
+    result = {"checked_at": now, "ok": False, "status": "offline",
+              "hub_url": hub_url, "latency_ms": None, "version": None,
+              "detail": "Studio Hub did not respond"}
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            response = await client.get(
+                f"{hub_url}/api/hub/health", headers={"X-Hub-Token": FLEET_TOKEN})
+            version_response = await client.get(f"{hub_url}/api/version")
+        result["latency_ms"] = round((time.monotonic() - started) * 1000)
+        if response.status_code == 200:
+            payload = response.json()
+            version_payload = version_response.json() if version_response.status_code == 200 else {}
+            result.update(ok=bool(payload.get("ok", True)), status="connected",
+                          version=version_payload.get("app_version") or version_payload.get("version"),
+                          detail="Authenticated connection is ready")
+        elif response.status_code in {401, 403}:
+            result.update(status="auth_error", detail="Hub responded but rejected the fleet token")
+        else:
+            result["detail"] = f"Hub responded with HTTP {response.status_code}"
+    except (httpx.HTTPError, ValueError) as exc:
+        result["detail"] = str(exc)[:180]
+    connection_cache.clear()
+    connection_cache.update(result)
+    return dict(connection_cache)
 
 
 def _save_job(job: dict) -> None:
@@ -326,7 +474,9 @@ def health():
     return {"ok": bool(_tool_path("ffmpeg") and _tool_path("ffprobe")),
             "app_version": VERSION, "busy": worker_lock.locked(),
             "queue_depth": sum(1 for j in jobs.values() if j["state"] == "queued"),
-            "videotoolbox": _has_videotoolbox(), **hardware}
+            "videotoolbox": _has_videotoolbox(),
+            "started_at": PROCESS_STARTED_AT,
+            "uptime_seconds": round(time.time() - PROCESS_STARTED_AT), **hardware}
 
 
 @app.get("/api/version")
@@ -341,6 +491,19 @@ def capabilities():
                          "cache": {"state": "cached"}, "is_cloud": True,
                          "capabilities": ["timestamp-assembly"]}],
             "retention": [1, 3, 7, 15, 30, "forever"]}
+
+
+@app.get("/api/dashboard")
+async def dashboard():
+    snapshot = _dashboard_snapshot()
+    snapshot["health"] = health()
+    snapshot["hub_connection"] = await _test_hub_connection()
+    return snapshot
+
+
+@app.post("/api/connection/test")
+async def test_connection():
+    return await _test_hub_connection(force=True)
 
 
 @app.post("/api/generate/render")
@@ -421,7 +584,12 @@ def put_settings(request: SettingsRequest):
     if request.retention_days not in RETENTION_CHOICES | {None}:
         raise HTTPException(400, "retention_days must be 1, 3, 7, 15, 30, or null")
     value = request.model_dump()
+    try:
+        value["hub_url"] = _normalise_hub_url(value["hub_url"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     SETTINGS_FILE.write_text(json.dumps(value, indent=2) + "\n")
+    connection_cache["checked_at"] = 0.0
     return value
 
 

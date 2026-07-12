@@ -1,7 +1,10 @@
+import asyncio
 import hashlib
 import importlib
 import json
+from pathlib import Path
 
+import httpx
 import pytest
 
 
@@ -74,3 +77,68 @@ def test_health_score_prefers_newer_chip_and_memory(worker, monkeypatch):
     monkeypatch.setattr(worker.platform, "processor", lambda: "Apple M4")
     facts = worker._hardware()
     assert facts["render_score"] >= 400
+
+
+def test_dashboard_reports_durable_lifetime_work(worker, monkeypatch):
+    monkeypatch.setattr(worker.time, "time", lambda: 1_000)
+    output = worker.OUTPUTS / "finished.mp4"
+    output.write_bytes(b"video")
+    worker.jobs.update({
+        "finished": {
+            "id": "finished", "label": "storystudio:EP001", "state": "done",
+            "created_at": 700, "started_at": 750, "finished_at": 870,
+            "duration_seconds": 120, "bytes": 500, "encoder": "h264_videotoolbox",
+            "acked_at": 900, "output_path": str(output),
+            "media": {"format": {"duration": "300.5"}},
+        },
+        "failed": {
+            "id": "failed", "label": "storystudio:EP002", "state": "error",
+            "created_at": 880, "started_at": 900, "finished_at": 930,
+            "error": "ffmpeg failed",
+        },
+    })
+    result = worker._dashboard_snapshot()
+    assert result["totals"]["completed"] == 1
+    assert result["totals"]["failed"] == 1
+    assert result["totals"]["render_seconds"] == 150
+    assert result["totals"]["video_seconds"] == 300.5
+    assert result["totals"]["success_rate"] == 50
+    assert result["totals"]["retained"] == 1
+    assert result["totals"]["encoders"] == {"h264_videotoolbox": 1}
+
+
+def test_hub_connection_test_is_authenticated(worker, monkeypatch):
+    calls = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, headers=None):
+            calls.append((url, headers))
+            if url.endswith("/api/version"):
+                return httpx.Response(200, json={"app_version": "1.22.1"})
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(worker.httpx, "AsyncClient", lambda **_kwargs: Client())
+    result = asyncio.run(worker._test_hub_connection(force=True))
+    assert result["ok"] is True and result["version"] == "1.22.1"
+    assert calls[0][1] == {"X-Hub-Token": worker.FLEET_TOKEN}
+
+
+def test_hub_url_validation(worker):
+    assert worker._normalise_hub_url("http://127.0.0.1:47873/") == "http://127.0.0.1:47873"
+    for value in ("file:///tmp/hub", "http://user:pass@hub.local", "not-a-url"):
+        with pytest.raises(ValueError):
+            worker._normalise_hub_url(value)
+
+
+def test_dashboard_ui_exposes_status_history_and_whats_new():
+    html = (Path(__file__).parents[1] / "frontend" / "index.html").read_text()
+    assert "Test connection" in html
+    assert "What's New" in html
+    assert "Lifetime episodes" in html
+    assert "Recent render work" in html
