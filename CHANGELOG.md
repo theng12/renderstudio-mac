@@ -1,5 +1,13 @@
 # Render Studio KH Changelog
 
+## 0.3.1 - 2026-07-13
+
+- Fleet credential saves and rotations now take effect immediately for both
+  protected Render Studio requests and authenticated callbacks/downloads to
+  Studio Hub; a running worker no longer keeps a stale startup credential.
+- Added regression coverage for accepting a rotated credential without a
+  process restart. No launcher, encoder, or dependency changes.
+
 ## 0.3.0 - 2026-07-12
 
 - Added separate worker-online and authenticated Studio Hub connection status,

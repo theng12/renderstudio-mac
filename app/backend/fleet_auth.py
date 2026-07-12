@@ -59,7 +59,7 @@ def make_middleware(token: str):
             return await call_next(request)
         offered = (request.headers.get("x-studio-token")
                    or request.headers.get("x-hub-token"))
-        if offered and secrets.compare_digest(offered, token):
+        if offered and secrets.compare_digest(offered, load_token()):
             return await call_next(request)
         return JSONResponse({"detail": "Fleet token required for remote Studio access."}, 401)
     return middleware

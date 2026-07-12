@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -77,6 +78,16 @@ def test_health_score_prefers_newer_chip_and_memory(worker, monkeypatch):
     monkeypatch.setattr(worker.platform, "processor", lambda: "Apple M4")
     facts = worker._hardware()
     assert facts["render_score"] >= 400
+
+
+def test_saved_fleet_token_takes_effect_without_restart(worker, monkeypatch):
+    from backend import fleet_auth
+
+    monkeypatch.setattr(fleet_auth, "load_token", lambda: "rotated-token")
+    accepted = TestClient(worker.app, headers={"X-Studio-Token": "rotated-token"})
+    stale = TestClient(worker.app, headers={"X-Studio-Token": worker.FLEET_TOKEN})
+    assert accepted.get("/api/dashboard").status_code == 200
+    assert stale.get("/api/dashboard").status_code == 401
 
 
 def test_dashboard_reports_durable_lifetime_work(worker, monkeypatch):

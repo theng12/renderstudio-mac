@@ -202,7 +202,7 @@ async def _test_hub_connection(force: bool = False) -> dict:
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             response = await client.get(
-                f"{hub_url}/api/hub/health", headers={"X-Hub-Token": FLEET_TOKEN})
+                f"{hub_url}/api/hub/health", headers={"X-Hub-Token": load_token()})
             version_response = await client.get(f"{hub_url}/api/version")
         result["latency_ms"] = round((time.monotonic() - started) * 1000)
         if response.status_code == 200:
@@ -342,7 +342,7 @@ async def _download(client: httpx.AsyncClient, asset: dict) -> Path:
     total = 0
     async with client.stream(
         "GET", asset["url"], timeout=None,
-        headers={"X-Hub-Token": FLEET_TOKEN},
+        headers={"X-Hub-Token": load_token()},
     ) as response:
         response.raise_for_status()
         with partial.open("wb") as handle:
