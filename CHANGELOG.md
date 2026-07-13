@@ -1,5 +1,12 @@
 # Render Studio KH Changelog
 
+## 0.3.2 - 2026-07-14
+
+- Fixed the reported application version: the worker now reports 0.3.2 from
+  `/api/version` and `/api/health` instead of a stale hardcoded 0.3.0, so
+  Studio Hub's fleet version scanner and the dashboard show the real version.
+  No launcher, encoder, or dependency changes.
+
 ## 0.3.1 - 2026-07-13
 
 - Fleet credential saves and rotations now take effect immediately for both
