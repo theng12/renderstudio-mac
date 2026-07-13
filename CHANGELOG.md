@@ -1,5 +1,18 @@
 # Render Studio KH Changelog
 
+## 0.3.3 - 2026-07-14
+
+- Fixed a dashboard outage that began the first time a render was purged by
+  retention or a manual clean: purging clears a job's `media`, and the video-
+  duration lookup then dereferenced `None`, so `/api/dashboard` returned HTTP
+  500 on every poll and the page reported the worker as unresponsive. The
+  lookup now guards the cleared metadata and reads a durable `video_seconds`
+  captured at completion, so lifetime video totals also survive purges.
+- Cancelled or crashed renders no longer leave an orphaned `.partial.mp4` in
+  the output store counting against disk usage; cleanup now runs for the
+  cancellation path too.
+- Added regression coverage for dashboards containing purged jobs.
+
 ## 0.3.2 - 2026-07-14
 
 - Fixed the reported application version: the worker now reports 0.3.2 from

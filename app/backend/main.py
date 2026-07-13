@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from .fleet_auth import load_token, make_middleware
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(os.environ.get("RENDERSTUDIO_DATA_DIR", ROOT / "data")).resolve()
 OBJECTS = DATA / "cache" / "objects"
@@ -127,9 +127,18 @@ def _elapsed(job: dict, now: float) -> float:
 
 
 def _video_duration(job: dict) -> float:
+    # Prefer the durable scalar captured at completion so lifetime totals
+    # survive retention purges, which clear the full `media` metadata.
+    stored = job.get("video_seconds")
+    if stored is not None:
+        try:
+            return max(0.0, float(stored))
+        except (TypeError, ValueError):
+            return 0.0
     try:
-        return max(0.0, float(job.get("media", {}).get("format", {}).get("duration", 0)))
-    except (TypeError, ValueError):
+        media = job.get("media") or {}
+        return max(0.0, float(media.get("format", {}).get("duration", 0)))
+    except (TypeError, ValueError, AttributeError):
         return 0.0
 
 
@@ -456,10 +465,17 @@ async def _render(job: dict) -> None:
                        sha256=_sha256(final), bytes=final.stat().st_size,
                        encoder=encoder, media=metadata, finished_at=time.time(),
                        duration_seconds=round(time.time() - job["started_at"], 2))
+            try:
+                job["video_seconds"] = max(0.0, float(metadata.get("format", {}).get("duration", 0)))
+            except (TypeError, ValueError):
+                job["video_seconds"] = 0.0
         except Exception as exc:
-            output.unlink(missing_ok=True)
             job.update(state="error", error=str(exc), finished_at=time.time())
         finally:
+            # On success the partial was renamed to `final`; on error or
+            # cancellation (CancelledError bypasses `except Exception`) this
+            # removes the orphaned partial so it stops counting against storage.
+            output.unlink(missing_ok=True)
             _save_job(job)
 
 

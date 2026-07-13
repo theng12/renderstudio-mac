@@ -118,6 +118,28 @@ def test_dashboard_reports_durable_lifetime_work(worker, monkeypatch):
     assert result["totals"]["encoders"] == {"h264_videotoolbox": 1}
 
 
+def test_dashboard_survives_purged_job_and_keeps_video_total(worker, monkeypatch):
+    monkeypatch.setattr(worker.time, "time", lambda: 1_000)
+    worker.jobs["finished"] = {
+        "id": "finished", "label": "storystudio:EP001", "state": "done",
+        "created_at": 700, "started_at": 750, "finished_at": 870,
+        "duration_seconds": 120, "bytes": 500, "encoder": "libx264",
+        "acked_at": 900, "media": {"format": {"duration": "300.5"}},
+        "video_seconds": 300.5,
+    }
+    # Retention/clean purge clears media to None; the dashboard must not crash
+    # and the durable video total must survive.
+    worker.jobs["finished"].update(state="purged", output_path=None,
+                                   output_url=None, media=None, purged_at=950)
+    result = worker._dashboard_snapshot()
+    assert result["totals"]["completed"] == 1
+    assert result["totals"]["video_seconds"] == 300.5
+    # A legacy purged job saved before the durable scalar existed must not raise.
+    worker.jobs["legacy"] = {"id": "legacy", "state": "purged", "media": None,
+                             "created_at": 600}
+    assert worker._dashboard_snapshot()["totals"]["video_seconds"] == 300.5
+
+
 def test_hub_connection_test_is_authenticated(worker, monkeypatch):
     calls = []
 
