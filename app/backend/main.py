@@ -10,7 +10,9 @@ import platform
 import re
 import shutil
 import subprocess
+import threading
 import time
+import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,8 +26,18 @@ from pydantic import BaseModel, Field
 
 from .fleet_auth import load_token, make_middleware
 
-VERSION = "0.3.3"
+
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _read_app_version() -> str:
+    try:
+        return (ROOT / "VERSION").read_text().strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+VERSION = _read_app_version()
 DATA = Path(os.environ.get("RENDERSTUDIO_DATA_DIR", ROOT / "data")).resolve()
 OBJECTS = DATA / "cache" / "objects"
 JOBS = DATA / "jobs"
@@ -53,6 +65,10 @@ DEFAULT_HUB_URL = "http://127.0.0.1:47873"
 connection_cache: dict = {"checked_at": 0.0, "ok": False, "status": "not_tested"}
 storage_cache: dict = {"checked_at": 0.0}
 PROCESS_STARTED_AT = time.time()
+UPDATE_REPO = "theng12/renderstudio-mac"
+UPDATE_CHECK_SECONDS = 6 * 3600
+update_state: dict = {"checked_at": 0.0, "latest": None, "checking": False}
+update_lock = threading.Lock()
 
 
 class RenderRequest(BaseModel):
@@ -73,6 +89,37 @@ def _normalise_hub_url(value: str) -> str:
             or parsed.username or parsed.password or parsed.query or parsed.fragment):
         raise ValueError("Studio Hub URL must be a plain http(s) address")
     return (value or "").strip().rstrip("/")
+
+
+def _parse_version(value: str | None) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in str(value).strip().lstrip("v").split(".")[:3])
+    except (TypeError, ValueError):
+        return (0,)
+
+
+def _refresh_latest_version() -> None:
+    try:
+        url = f"https://raw.githubusercontent.com/{UPDATE_REPO}/main/VERSION"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            latest = response.read().decode("utf-8").strip()
+            if _parse_version(latest) != (0,):
+                update_state["latest"] = latest
+    except (OSError, UnicodeError):
+        pass
+    finally:
+        with update_lock:
+            update_state["checked_at"] = time.time()
+            update_state["checking"] = False
+
+
+def _schedule_update_check() -> None:
+    with update_lock:
+        stale = time.time() - float(update_state["checked_at"]) > UPDATE_CHECK_SECONDS
+        if not stale or update_state["checking"]:
+            return
+        update_state["checking"] = True
+    threading.Thread(target=_refresh_latest_version, daemon=True).start()
 
 
 def _load_settings() -> dict:
@@ -497,7 +544,17 @@ def health():
 
 @app.get("/api/version")
 def version():
-    return {"version": VERSION, "app": "renderstudio-mac"}
+    return {"app_version": VERSION, "version": VERSION,
+            "app": "renderstudio-mac", "title": app.title}
+
+
+@app.get("/api/update-status")
+def update_status():
+    _schedule_update_check()
+    latest = update_state["latest"]
+    return {"app_version": VERSION, "latest_version": latest,
+            "update_available": bool(latest and _parse_version(latest) > _parse_version(VERSION)),
+            "checking": bool(update_state["checking"])}
 
 
 @app.get("/api/capabilities")

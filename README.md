@@ -32,6 +32,11 @@ or Tailscale address of the scheduling Hub when the worker uses a remote Hub.
 The dashboard also controls the verified-copy retention period and minimum free
 disk reserve.
 
+The header shows the exact installed release and opens **What's New**. Render
+Studio checks the published `VERSION` in the background and displays an update
+notice when a newer release is available; installation still happens safely
+through the **Update** action in Pinokio.
+
 ## Safety
 
 - Only FFmpeg and FFprobe steps are accepted; shell commands are never run.
@@ -43,10 +48,12 @@ disk reserve.
 
 ## API
 
-`GET /api/health` reports availability, hardware score, encoder support, queue
-depth, and service uptime. `GET /api/dashboard` returns sanitized work history,
-lifetime totals, storage, connection state, and settings. `GET /api/catalog`
-advertises `episode-assembly-v1`.
+`GET /api/health` reports availability, application version, hardware score,
+encoder support, queue depth, and service uptime. `GET /api/version` exposes the
+same root release version to Studio Hub. `GET /api/update-status` performs a
+non-blocking published-version check. `GET /api/dashboard` returns sanitized
+work history, lifetime totals, storage, connection state, and settings.
+`GET /api/catalog` advertises `episode-assembly-v1`.
 
 Submit a render with `POST /api/generate/render`:
 

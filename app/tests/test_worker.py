@@ -80,6 +80,27 @@ def test_health_score_prefers_newer_chip_and_memory(worker, monkeypatch):
     assert facts["render_score"] >= 400
 
 
+def test_version_contract_uses_release_file(worker):
+    client = TestClient(worker.app)
+    expected = (Path(worker.__file__).parents[2] / "VERSION").read_text().strip()
+    assert worker.VERSION == expected
+    assert client.get("/api/health").json()["app_version"] == expected
+    payload = client.get("/api/version").json()
+    assert payload["app_version"] == expected
+    assert payload["version"] == expected
+    assert payload["title"] == "Render Studio KH"
+
+
+def test_update_status_compares_semantic_versions(worker, monkeypatch):
+    monkeypatch.setattr(worker, "_schedule_update_check", lambda: None)
+    worker.update_state.update(latest="99.0.0", checking=False)
+    payload = worker.update_status()
+    assert payload["app_version"] == worker.VERSION
+    assert payload["latest_version"] == "99.0.0"
+    assert payload["update_available"] is True
+    assert worker._parse_version("v1.12.3") > worker._parse_version("1.9.9")
+
+
 def test_saved_fleet_token_takes_effect_without_restart(worker, monkeypatch):
     from backend import fleet_auth
 
@@ -173,5 +194,9 @@ def test_dashboard_ui_exposes_status_history_and_whats_new():
     html = (Path(__file__).parents[1] / "frontend" / "index.html").read_text()
     assert "Test connection" in html
     assert "What's New" in html
+    assert 'id="version-badge"' in html
+    assert 'id="update-banner"' in html
+    assert "renderstudio_seen\",APP_VERSION" in html
+    assert "0.4.0 / Releases you can trust" in html
     assert "Lifetime episodes" in html
     assert "Recent render work" in html

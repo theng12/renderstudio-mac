@@ -14,7 +14,8 @@ LAUNCHER_ROOT = Path(__file__).resolve().parents[2]
 API_ROOT = LAUNCHER_ROOT.parent
 HUB_TOKEN_FILE = API_ROOT / "studiohub-mac" / ".fleet_token"
 SHARED_TOKEN_FILE = API_ROOT / ".kh_studio_token"
-PUBLIC_PATHS = {"/", "/api/health", "/api/version", "/api/capabilities"}
+PUBLIC_PATHS = {"/", "/api/health", "/api/version", "/api/capabilities",
+                "/api/update-status"}
 
 
 def _read_private(path: Path) -> str | None:

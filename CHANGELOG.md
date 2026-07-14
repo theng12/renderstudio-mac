@@ -1,5 +1,19 @@
 # Render Studio KH Changelog
 
+## 0.4.0 - 2026-07-14
+
+- Added a visible installed-version badge to the Render Studio dashboard and
+  made the root `VERSION` file the single release source for the backend,
+  health response, Studio Hub inventory, dashboard, and release acknowledgement.
+- Reworked What's New so its unread indicator follows the actual installed
+  release instead of a hardcoded version, and added a clear current-version
+  line inside the release view.
+- Added a non-blocking published-version check and an in-app update notice that
+  directs updates through the existing Pinokio Update action. GitHub outages do
+  not delay or block the local dashboard.
+- Added regression coverage for version reporting, update comparison, public
+  update discovery, and the dynamic release UI.
+
 ## 0.3.3 - 2026-07-14
 
 - Fixed a dashboard outage that began the first time a render was purged by
