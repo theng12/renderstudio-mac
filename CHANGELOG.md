@@ -8,9 +8,9 @@
 - Reworked What's New so its unread indicator follows the actual installed
   release instead of a hardcoded version, and added a clear current-version
   line inside the release view.
-- Added a non-blocking published-version check and an in-app update notice that
-  directs updates through the existing Pinokio Update action. GitHub outages do
-  not delay or block the local dashboard.
+- Added a non-blocking, cache-safe published-version check and an in-app update
+  notice that directs updates through the existing Pinokio Update action.
+  GitHub outages do not delay or block the local dashboard.
 - Added regression coverage for version reporting, update comparison, public
   update discovery, and the dynamic release UI.
 

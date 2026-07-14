@@ -66,6 +66,7 @@ connection_cache: dict = {"checked_at": 0.0, "ok": False, "status": "not_tested"
 storage_cache: dict = {"checked_at": 0.0}
 PROCESS_STARTED_AT = time.time()
 UPDATE_REPO = "theng12/renderstudio-mac"
+UPDATE_VERSION_URL = f"https://api.github.com/repos/{UPDATE_REPO}/contents/VERSION?ref=main"
 UPDATE_CHECK_SECONDS = 6 * 3600
 update_state: dict = {"checked_at": 0.0, "latest": None, "checking": False}
 update_lock = threading.Lock()
@@ -100,8 +101,12 @@ def _parse_version(value: str | None) -> tuple[int, ...]:
 
 def _refresh_latest_version() -> None:
     try:
-        url = f"https://raw.githubusercontent.com/{UPDATE_REPO}/main/VERSION"
-        with urllib.request.urlopen(url, timeout=5) as response:
+        request = urllib.request.Request(
+            UPDATE_VERSION_URL,
+            headers={"Accept": "application/vnd.github.raw+json",
+                     "User-Agent": "renderstudio-mac-update-check"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
             latest = response.read().decode("utf-8").strip()
             if _parse_version(latest) != (0,):
                 update_state["latest"] = latest

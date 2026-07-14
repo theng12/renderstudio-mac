@@ -101,6 +101,31 @@ def test_update_status_compares_semantic_versions(worker, monkeypatch):
     assert worker._parse_version("v1.12.3") > worker._parse_version("1.9.9")
 
 
+def test_update_check_reads_uncached_github_release(worker, monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b"9.8.7\n"
+
+    def open_request(request, timeout):
+        captured.update(url=request.full_url,
+                        accept=request.headers.get("Accept"), timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr(worker.urllib.request, "urlopen", open_request)
+    worker._refresh_latest_version()
+    assert captured == {"url": worker.UPDATE_VERSION_URL,
+                        "accept": "application/vnd.github.raw+json", "timeout": 5}
+    assert worker.update_state["latest"] == "9.8.7"
+
+
 def test_saved_fleet_token_takes_effect_without_restart(worker, monkeypatch):
     from backend import fleet_auth
 
