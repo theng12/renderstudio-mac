@@ -75,6 +75,7 @@ update_lock = threading.Lock()
 class RenderRequest(BaseModel):
     repo: str = "episode-assembly-v1"
     label: str = "episode"
+    workflow: str = "video_assembly"
     recipe: dict
 
 
@@ -565,9 +566,9 @@ def update_status():
 @app.get("/api/capabilities")
 @app.get("/api/catalog")
 def capabilities():
-    return {"models": [{"repo": "episode-assembly-v1", "label": "Episode Assembly",
+    return {"models": [{"repo": "episode-assembly-v1", "label": "Video Assembly",
                          "cache": {"state": "cached"}, "is_cloud": True,
-                         "capabilities": ["timestamp-assembly"]}],
+                         "capabilities": ["video-assembly", "scene-plan-timing"]}],
             "retention": [1, 3, 7, 15, 30, "forever"]}
 
 
@@ -588,6 +589,8 @@ async def test_connection():
 async def submit(request: RenderRequest):
     if request.repo != "episode-assembly-v1":
         raise HTTPException(400, "unsupported render recipe")
+    if request.workflow != "video_assembly":
+        raise HTTPException(400, "unsupported render workflow")
     try:
         _validate_recipe(request.recipe)
     except ValueError as exc:
@@ -597,7 +600,8 @@ async def submit(request: RenderRequest):
         raise HTTPException(507, "worker is below its minimum free-disk reserve")
     job_id = uuid.uuid4().hex[:12]
     job = {"id": job_id, "state": "queued", "progress": 0.0,
-           "label": request.label, "recipe": request.recipe,
+           "label": request.label, "workflow": request.workflow,
+           "recipe": request.recipe,
            "created_at": time.time(), "error": None}
     jobs[job_id] = job
     _save_job(job)

@@ -61,6 +61,7 @@ Submit a render with `POST /api/generate/render`:
 {
   "repo": "episode-assembly-v1",
   "label": "EP001",
+  "workflow": "video_assembly",
   "recipe": {
     "version": 1,
     "assets": [
@@ -72,6 +73,10 @@ Submit a render with `POST /api/generate/render`:
   }
 }
 ```
+
+`video_assembly` is the single accepted Story Studio workflow. Its recipe may
+mix exact Scene Plan stills and approved motion clips while preserving the
+same timeline, effects, audio, verification, and copy-back contract.
 
 Poll `GET /api/generate/jobs/{id}`, download `output_url`, verify the returned
 `sha256`, then call `POST /api/generate/jobs/{id}/ack`.

@@ -1,5 +1,14 @@
 # Render Studio KH Changelog
 
+## 0.4.1 - 2026-07-14
+
+- Replaced the retired timestamp-assembly capability with the unified Story
+  Studio `video_assembly` workflow and Scene Plan timing capability.
+- Render jobs now retain their workflow identity in durable job history and
+  reject unrelated workflow payloads instead of accepting an ambiguous recipe.
+- Updated the catalog, API documentation, and regression coverage for unified
+  local/Studio Hub episode assembly.
+
 ## 0.4.0 - 2026-07-14
 
 - Added a visible installed-version badge to the Render Studio dashboard and

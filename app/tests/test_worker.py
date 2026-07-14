@@ -32,6 +32,21 @@ def test_recipe_accepts_confined_ffmpeg_job(worker):
     worker._validate_recipe(recipe())
 
 
+def test_catalog_advertises_unified_video_assembly(worker):
+    model = worker.capabilities()["models"][0]
+    assert model["label"] == "Video Assembly"
+    assert "video-assembly" in model["capabilities"]
+    assert "scene-plan-timing" in model["capabilities"]
+    assert worker.RenderRequest(recipe=recipe()).workflow == "video_assembly"
+
+
+def test_submit_rejects_retired_render_workflows(worker):
+    request = worker.RenderRequest(
+        workflow="timestamp_assembly", recipe=recipe())
+    with pytest.raises(worker.HTTPException, match="unsupported render workflow"):
+        asyncio.run(worker.submit(request))
+
+
 @pytest.mark.parametrize("bad", [
     {"version": 2, "assets": [], "steps": []},
     {"version": 1, "assets": [], "steps": [{"tool": "sh", "args": ["x"]}]},
@@ -222,6 +237,6 @@ def test_dashboard_ui_exposes_status_history_and_whats_new():
     assert 'id="version-badge"' in html
     assert 'id="update-banner"' in html
     assert "renderstudio_seen\",APP_VERSION" in html
-    assert "0.4.0 / Releases you can trust" in html
+    assert "0.4.1 / One unified video renderer" in html
     assert "Lifetime episodes" in html
     assert "Recent render work" in html
