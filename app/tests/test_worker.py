@@ -37,6 +37,9 @@ def test_catalog_advertises_unified_video_assembly(worker):
     assert model["label"] == "Video Assembly"
     assert "video-assembly" in model["capabilities"]
     assert "scene-plan-timing" in model["capabilities"]
+    assert "title-image" in model["capabilities"]
+    assert "logo-overlay" in model["capabilities"]
+    assert "presentation-frame-media" in model["capabilities"]
     assert worker.RenderRequest(recipe=recipe()).workflow == "video_assembly"
 
 
@@ -237,6 +240,6 @@ def test_dashboard_ui_exposes_status_history_and_whats_new():
     assert 'id="version-badge"' in html
     assert 'id="update-banner"' in html
     assert "renderstudio_seen\",APP_VERSION" in html
-    assert "0.4.1 / One unified video renderer" in html
+    assert "0.5.0 / Full visual assembly on workers" in html
     assert "Lifetime episodes" in html
     assert "Recent render work" in html

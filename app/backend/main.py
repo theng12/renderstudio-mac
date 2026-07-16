@@ -568,7 +568,11 @@ def update_status():
 def capabilities():
     return {"models": [{"repo": "episode-assembly-v1", "label": "Video Assembly",
                          "cache": {"state": "cached"}, "is_cloud": True,
-                         "capabilities": ["video-assembly", "scene-plan-timing"]}],
+                         "capabilities": [
+                             "video-assembly", "scene-plan-timing", "title-image",
+                             "logo-overlay", "color-grading", "vignette", "film-grain",
+                             "letterbox", "presentation-frame-media",
+                         ]}],
             "retention": [1, 3, 7, 15, 30, "forever"]}
 
 

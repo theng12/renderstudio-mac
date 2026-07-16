@@ -1,5 +1,15 @@
 # Render Studio KH Changelog
 
+## 0.5.0 - 2026-07-16
+
+- Added verified worker-side support for Story Studio title images, logo overlays,
+  color grading, vignette, film grain, cinematic letterbox bars, and presentation
+  frame backgrounds.
+- Render recipes now transfer those supporting assets through Studio Hub with the
+  same immutable checksum contract as scene media before FFmpeg runs locally.
+- Expanded the published worker capability inventory so routing diagnostics can
+  explain why a Video Assembly job is eligible for a Render Studio machine.
+
 ## 0.4.1 - 2026-07-14
 
 - Replaced the retired timestamp-assembly capability with the unified Story

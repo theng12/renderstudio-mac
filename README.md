@@ -75,8 +75,9 @@ Submit a render with `POST /api/generate/render`:
 ```
 
 `video_assembly` is the single accepted Story Studio workflow. Its recipe may
-mix exact Scene Plan stills and approved motion clips while preserving the
-same timeline, effects, audio, verification, and copy-back contract.
+mix exact Scene Plan stills and approved motion clips with title images, logos,
+presentation backgrounds, grading, vignette, grain, and letterbox effects while
+preserving the same timeline, verification, and copy-back contract.
 
 Poll `GET /api/generate/jobs/{id}`, download `output_url`, verify the returned
 `sha256`, then call `POST /api/generate/jobs/{id}/ack`.
