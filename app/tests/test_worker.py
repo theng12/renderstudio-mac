@@ -20,7 +20,7 @@ def recipe(url="http://hub.test/input", checksum=None):
     checksum = checksum or hashlib.sha256(b"input").hexdigest()
     return {
         "version": 1,
-        "assets": [{"id": "input", "url": url, "sha256": checksum}],
+        "assets": [{"id": "input", "url": url, "sha256": checksum, "extension": ".mp4"}],
         "steps": [{"tool": "ffmpeg", "args": [
             "-y", "-i", "{{asset:input}}", "-c:v", "{{video_encoder}}",
             "{{output}}",
@@ -40,6 +40,10 @@ def test_catalog_advertises_unified_video_assembly(worker):
     assert "title-image" in model["capabilities"]
     assert "logo-overlay" in model["capabilities"]
     assert "presentation-frame-media" in model["capabilities"]
+    assert "overlay-layers" in model["capabilities"]
+    assert "animated-subtitles" in model["capabilities"]
+    assert "compilation-layout" in model["capabilities"]
+    assert "webm-export" in model["capabilities"]
     assert worker.RenderRequest(recipe=recipe()).workflow == "video_assembly"
 
 
@@ -59,12 +63,30 @@ def test_recipe_rejects_unsupported_shapes(worker, bad):
         worker._validate_recipe(bad)
 
 
+def test_recipe_accepts_supported_output_containers(worker):
+    for extension in ("mp4", "mov", "webm"):
+        value = recipe()
+        value["output_extension"] = extension
+        worker._validate_recipe(value)
+    value = recipe()
+    value["output_extension"] = "avi"
+    with pytest.raises(ValueError, match="output_extension"):
+        worker._validate_recipe(value)
+
+
 def test_recipe_rejects_local_and_direct_network_arguments(worker):
     for value in ("/etc/passwd", "../outside", "http://unverified/input"):
         value_recipe = recipe()
         value_recipe["steps"][0]["args"].insert(0, value)
         with pytest.raises(ValueError):
             worker._validate_recipe(value_recipe)
+
+
+def test_recipe_rejects_unsafe_asset_extension(worker):
+    value = recipe()
+    value["assets"][0]["extension"] = "../mp4"
+    with pytest.raises(ValueError, match="filename extension"):
+        worker._validate_recipe(value)
 
 
 def test_placeholder_resolution(worker, tmp_path):
@@ -240,6 +262,6 @@ def test_dashboard_ui_exposes_status_history_and_whats_new():
     assert 'id="version-badge"' in html
     assert 'id="update-banner"' in html
     assert "renderstudio_seen\",APP_VERSION" in html
-    assert "0.5.0 / Full visual assembly on workers" in html
+    assert "0.6.0 / Complete Video Assembly on workers" in html
     assert "Lifetime episodes" in html
     assert "Recent render work" in html

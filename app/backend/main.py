@@ -361,6 +361,8 @@ def _has_videotoolbox() -> bool:
 def _validate_recipe(recipe: dict) -> None:
     if recipe.get("version") != 1:
         raise ValueError("recipe.version must be 1")
+    if recipe.get("output_extension", "mp4") not in {"mp4", "mov", "webm"}:
+        raise ValueError("output_extension must be mp4, mov, or webm")
     assets = recipe.get("assets")
     steps = recipe.get("steps")
     if not isinstance(assets, list) or not isinstance(steps, list) or not steps:
@@ -375,6 +377,9 @@ def _validate_recipe(recipe: dict) -> None:
             raise ValueError(f"asset {name} needs an http(s) URL")
         if not re.fullmatch(r"[0-9a-fA-F]{64}", asset.get("sha256", "")):
             raise ValueError(f"asset {name} needs a SHA-256 checksum")
+        extension = asset.get("extension", "")
+        if extension and not re.fullmatch(r"\.[A-Za-z0-9]{1,10}", extension):
+            raise ValueError(f"asset {name} has an invalid filename extension")
         seen.add(name)
     for step in steps:
         if step.get("tool") not in {"ffmpeg", "ffprobe"}:
@@ -396,7 +401,8 @@ def _validate_recipe(recipe: dict) -> None:
 
 async def _download(client: httpx.AsyncClient, asset: dict) -> Path:
     expected = asset["sha256"].lower()
-    dest = OBJECTS / expected
+    extension = asset.get("extension", "")
+    dest = OBJECTS / f"{expected}{extension}"
     if dest.exists() and _sha256(dest) == expected:
         return dest
     partial = dest.with_suffix(".partial")
@@ -481,8 +487,9 @@ async def _render(job: dict) -> None:
         work = folder / "work"
         work.mkdir(exist_ok=True)
         log = folder / "render.log"
-        output = OUTPUTS / f"{job['id']}.partial.mp4"
-        final = OUTPUTS / f"{job['id']}.mp4"
+        extension = job["recipe"].get("output_extension", "mp4")
+        output = OUTPUTS / f"{job['id']}.partial.{extension}"
+        final = OUTPUTS / f"{job['id']}.{extension}"
         try:
             recipe = job["recipe"]
             async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -571,7 +578,11 @@ def capabilities():
                          "capabilities": [
                              "video-assembly", "scene-plan-timing", "title-image",
                              "logo-overlay", "color-grading", "vignette", "film-grain",
-                             "letterbox", "presentation-frame-media",
+                             "letterbox", "presentation-frame-media", "title-text-card",
+                             "outro-media", "timeline-clips", "music-mix",
+                             "background-noise", "overlay-layers", "chroma-key",
+                             "animated-subtitles", "compilation-layout", "mov-export",
+                             "webm-export",
                          ]}],
             "retention": [1, 3, 7, 15, 30, "forever"]}
 
@@ -657,7 +668,8 @@ def output(job_id: str):
     path = Path(job.get("output_path", "")) if job else None
     if not path or not path.is_file() or path.parent != OUTPUTS:
         raise HTTPException(404, "output not found")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    media_types = {".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
+    return FileResponse(path, media_type=media_types.get(path.suffix.lower(), "application/octet-stream"), filename=path.name)
 
 
 @app.get("/api/settings")
