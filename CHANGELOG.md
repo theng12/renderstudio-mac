@@ -1,5 +1,14 @@
 # Render Studio KH Changelog
 
+## 0.6.2 - 2026-07-18
+
+- Kept **Install as Startup Service** available while the manual worker is
+  running, matching the sibling Studio launchers.
+- The existing service installer already stops the manual listener and takes
+  over port 47874 before starting launchd, so conversion no longer requires a
+  separate manual stop step. Verified with the launcher flow and the full test
+  suite; service scripts and backend behavior were checked and left unchanged.
+
 ## 0.6.1 - 2026-07-18
 
 - Retried transient Studio Hub asset-download failures up to four times before

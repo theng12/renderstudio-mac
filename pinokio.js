@@ -6,6 +6,7 @@ module.exports = {
   menu: async (kernel, info) => {
     const serviceInstalled = info.exists("service/.installed")
     const serviceUrl = "http://localhost:47874"
+    const serviceItem = { icon: "fa-solid fa-heart-pulse", text: "Install as Startup Service", href: "service.js" }
     if (info.running("install.js")) {
       return [{ default: true, icon: "fa-solid fa-plug", text: "Installing", href: "install.js" }]
     }
@@ -31,7 +32,8 @@ module.exports = {
           { default: true, icon: "fa-solid fa-film", text: "Open Render Studio", href: `${local.url}/?_cb=${Date.now()}` },
           { icon: "fa-solid fa-terminal", text: "Worker Log", href: "start.js" },
           { icon: "fa-solid fa-folder-open", text: "Retained Videos", href: "data/outputs?fs=true" },
-          { icon: "fa-solid fa-rotate", text: "Update", href: "update.js" }
+          { icon: "fa-solid fa-rotate", text: "Update", href: "update.js" },
+          serviceItem
         ]
       }
       return [{ default: true, icon: "fa-solid fa-terminal", text: "Starting", href: "start.js" }]
