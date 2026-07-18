@@ -99,6 +99,29 @@ def test_placeholder_resolution(worker, tmp_path):
     assert str(tmp_path / "fonts") in value
 
 
+def test_download_retries_transient_hub_asset_error(worker):
+    payload = b"durable render input"
+    checksum = hashlib.sha256(payload).hexdigest()
+    attempts = []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        if len(attempts) == 1:
+            return httpx.Response(404, request=request)
+        return httpx.Response(200, content=payload, request=request)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await worker._download(client, {
+                "id": "narration", "url": "http://hub.test/api/hub/render-assets/asset",
+                "sha256": checksum, "extension": ".mp3", "bytes": len(payload),
+            })
+
+    destination = asyncio.run(run())
+    assert destination.read_bytes() == payload
+    assert len(attempts) == 2
+
+
 def test_cleanup_waits_for_ack_and_honors_pin(worker, tmp_path, monkeypatch):
     monkeypatch.setattr(worker.time, "time", lambda: 1_000_000)
     worker.SETTINGS_FILE.write_text(json.dumps({"retention_days": 1, "minimum_free_gb": 1}))

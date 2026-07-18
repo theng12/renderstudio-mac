@@ -1,5 +1,13 @@
 # Render Studio KH Changelog
 
+## 0.6.1 - 2026-07-18
+
+- Retried transient Studio Hub asset-download failures up to four times before
+  failing a render. This covers brief Tailnet disconnects and temporary 404s
+  while preserving checksum and byte-size verification on every attempt.
+- Kept partial downloads isolated and removed them before each retry, so an
+  interrupted transfer cannot be mistaken for a verified render input.
+
 ## 0.5.0 - 2026-07-16
 
 - Added verified worker-side support for Story Studio title images, logo overlays,

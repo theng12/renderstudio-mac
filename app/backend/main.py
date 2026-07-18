@@ -405,27 +405,40 @@ async def _download(client: httpx.AsyncClient, asset: dict) -> Path:
     dest = OBJECTS / f"{expected}{extension}"
     if dest.exists() and _sha256(dest) == expected:
         return dest
-    partial = dest.with_suffix(".partial")
-    digest = hashlib.sha256()
-    total = 0
-    async with client.stream(
-        "GET", asset["url"], timeout=None,
-        headers={"X-Hub-Token": load_token()},
-    ) as response:
-        response.raise_for_status()
-        with partial.open("wb") as handle:
-            async for chunk in response.aiter_bytes(1024 * 1024):
-                total += len(chunk)
-                digest.update(chunk)
-                handle.write(chunk)
-    if digest.hexdigest() != expected:
-        partial.unlink(missing_ok=True)
-        raise ValueError(f"checksum mismatch for {asset['id']}")
-    if asset.get("bytes") is not None and total != int(asset["bytes"]):
-        partial.unlink(missing_ok=True)
-        raise ValueError(f"size mismatch for {asset['id']}")
-    partial.replace(dest)
-    return dest
+    partial = dest.with_name(f"{dest.name}.partial")
+    last_error: Exception | None = None
+    # The Hub owns a seven-day immutable lease for these assets. A worker can
+    # therefore retry a transient Tailnet/HTTP stream failure without asking
+    # Story Studio to upload the entire episode a second time.
+    for attempt in range(1, 5):
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            partial.unlink(missing_ok=True)
+            async with client.stream(
+                "GET", asset["url"], timeout=None,
+                headers={"X-Hub-Token": load_token()},
+            ) as response:
+                response.raise_for_status()
+                with partial.open("wb") as handle:
+                    async for chunk in response.aiter_bytes(1024 * 1024):
+                        total += len(chunk)
+                        digest.update(chunk)
+                        handle.write(chunk)
+            if digest.hexdigest() != expected:
+                raise ValueError(f"checksum mismatch for {asset['id']}")
+            if asset.get("bytes") is not None and total != int(asset["bytes"]):
+                raise ValueError(f"size mismatch for {asset['id']}")
+            partial.replace(dest)
+            return dest
+        except (httpx.HTTPError, OSError, ValueError) as error:
+            last_error = error
+            partial.unlink(missing_ok=True)
+            if attempt < 4:
+                await asyncio.sleep(attempt * 2)
+    raise ValueError(
+        f"could not download render asset {asset['id']} after 4 attempts: {last_error}"
+    )
 
 
 def _sha256(path: Path) -> str:
