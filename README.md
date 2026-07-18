@@ -32,10 +32,16 @@ or Tailscale address of the scheduling Hub when the worker uses a remote Hub.
 The dashboard also controls the verified-copy retention period and minimum free
 disk reserve.
 
-The header shows the exact installed release and opens **What's New**. Render
-Studio checks the published `VERSION` in the background and displays an update
-notice when a newer release is available; installation still happens safely
-through the **Update** action in Pinokio.
+The header shows the exact installed release and opens **What's New**. The
+**Automatic updates** card provides independent Off (default), Notify only, and
+Automatic modes with daily or weekly maintenance schedules. It shows installed
+and latest versions, last and next checks, scheduler state, live update state,
+defer or rollback reasons, and retry controls. **Update after current work** is
+durable even if the page closes; all running and queued renders finish first.
+
+The same controller is available from Studio Hub's **Updates** workspace. Hub
+operations remain staggered: Render Studio must restart on the published
+version and answer healthy before the Hub advances to the next app.
 
 ## Safety
 
@@ -45,6 +51,10 @@ through the **Update** action in Pinokio.
 - Output must contain a video stream and pass a complete decode validation.
 - VideoToolbox is preferred. A failed hardware encode is retried with libx264.
 - Retention cleanup starts only after the main machine acknowledges receipt.
+- Automatic updates require the fixed GitHub origin, `main`, a clean fast-
+  forward, enough disk, successful dependency/import checks, an idle queue,
+  and exact-version health after restart. A failed install attempts one bounded
+  rollback and records redacted logs under `logs/auto_update/`.
 
 ## API
 
@@ -54,6 +64,13 @@ same root release version to Studio Hub. `GET /api/update-status` performs a
 non-blocking published-version check. `GET /api/dashboard` returns sanitized
 work history, lifetime totals, storage, connection state, and settings.
 `GET /api/catalog` advertises `episode-assembly-v1`.
+
+`GET /api/auto-update/status` and `GET /api/auto-update/readiness` expose the
+safe updater state and render-queue blockers. `POST /api/auto-update/settings`
+saves `{mode, frequency, maintenance_hour, idle_only}` and verifies its local
+schedule. `POST /api/auto-update/check`, `/update`, and `/retry` start bounded
+background helpers; `/update` accepts `{"after_current": true}` for a durable
+idle retry.
 
 Submit a render with `POST /api/generate/render`:
 

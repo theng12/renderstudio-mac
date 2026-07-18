@@ -288,3 +288,39 @@ def test_dashboard_ui_exposes_status_history_and_whats_new():
     assert "0.6.0 / Complete Video Assembly on workers" in html
     assert "Lifetime episodes" in html
     assert "Recent render work" in html
+    assert 'id="automatic-updates"' in html
+    assert "Update after current work" in html
+    assert "0.7.0 / Safe automatic updates" in html
+
+
+def test_automatic_update_readiness_tracks_running_and_queued_renders(worker):
+    assert worker.automatic_update_readiness() == {"idle": True, "reasons": []}
+    worker.jobs.update({
+        "running": {"id": "running", "state": "running"},
+        "queued": {"id": "queued", "state": "queued"},
+    })
+    readiness = worker.automatic_update_readiness()
+    assert readiness["idle"] is False
+    assert "1 render job is running" in readiness["reasons"][0]
+    assert "1 render job is queued" in readiness["reasons"][0]
+
+
+def test_automatic_update_api_exposes_controller(worker, monkeypatch):
+    status = {"state": "idle", "installed_version": worker.VERSION,
+              "settings": {"mode": "off"}}
+    monkeypatch.setattr(worker.auto_updater, "public_status", lambda: status)
+    client = TestClient(worker.app, headers={"X-Studio-Token": worker.FLEET_TOKEN})
+    assert client.get("/api/auto-update/status").json() == status
+
+    saved = {}
+    monkeypatch.setattr(
+        worker.auto_updater, "save_settings",
+        lambda payload: saved.update(payload) or {**status, "settings": payload},
+    )
+    response = client.post("/api/auto-update/settings", json={
+        "mode": "notify", "frequency": "weekly",
+        "maintenance_hour": 6, "idle_only": True,
+    })
+    assert response.status_code == 200
+    assert saved == {"mode": "notify", "frequency": "weekly",
+                     "maintenance_hour": 6, "idle_only": True}

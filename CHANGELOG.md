@@ -1,5 +1,22 @@
 # Render Studio KH Changelog
 
+## 0.7.0 - 2026-07-19
+
+- Added the same optional Off, Notify only, and Automatic update controller
+  used by the sibling Studios, including daily/weekly maintenance schedules,
+  installed/latest versions, last/next checks, live state, retry, defer reasons,
+  release notes, and verified LaunchAgent scheduling.
+- Render updates now wait for every running and queued render to finish. **Update
+  after current work** persists independently of the browser and automatically
+  retries when the worker becomes idle.
+- Added the shared safe updater contract: fixed GitHub origin and `main`, clean
+  fast-forward, disk/dependency/import checks, service-aware restart, exact-
+  version health verification, one bounded rollback, locking, redacted logs,
+  and removable Off-by-default scheduling.
+- Render Studio now exposes authenticated automatic-update APIs so Studio Hub
+  can include it in Check all, per-app mode changes, individual updates, and
+  staggered **Update idle apps** operations.
+
 ## 0.6.2 - 2026-07-18
 
 - Kept **Install as Startup Service** available while the manual worker is

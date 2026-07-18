@@ -25,6 +25,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .fleet_auth import load_token, make_middleware
+from .auto_update import UpdateError
+from .auto_update_config import create_updater
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +40,7 @@ def _read_app_version() -> str:
 
 
 VERSION = _read_app_version()
+APP_VERSION = VERSION
 DATA = Path(os.environ.get("RENDERSTUDIO_DATA_DIR", ROOT / "data")).resolve()
 OBJECTS = DATA / "cache" / "objects"
 JOBS = DATA / "jobs"
@@ -83,6 +86,34 @@ class SettingsRequest(BaseModel):
     retention_days: int | None = Field(default=7)
     minimum_free_gb: int = Field(default=20, ge=1, le=1000)
     hub_url: str = DEFAULT_HUB_URL
+
+
+class AutoUpdateSettingsBody(BaseModel):
+    mode: str
+    frequency: str
+    maintenance_hour: int
+    idle_only: bool = True
+
+
+class AutoUpdateRequestBody(BaseModel):
+    after_current: bool = False
+
+
+def _automatic_update_blockers() -> list[str]:
+    active = [job for job in jobs.values() if job.get("state") in {"queued", "running"}]
+    if not active:
+        return []
+    running = sum(1 for job in active if job.get("state") == "running")
+    queued = len(active) - running
+    parts = []
+    if running:
+        parts.append(f"{running} render job{' is' if running == 1 else 's are'} running")
+    if queued:
+        parts.append(f"{queued} render job{' is' if queued == 1 else 's are'} queued")
+    return [" and ".join(parts)]
+
+
+auto_updater = create_updater(readiness=_automatic_update_blockers)
 
 
 def _normalise_hub_url(value: str) -> str:
@@ -581,6 +612,48 @@ def update_status():
     return {"app_version": VERSION, "latest_version": latest,
             "update_available": bool(latest and _parse_version(latest) > _parse_version(VERSION)),
             "checking": bool(update_state["checking"])}
+
+
+@app.get("/api/auto-update/status")
+def automatic_update_status() -> dict:
+    return auto_updater.public_status()
+
+
+@app.get("/api/auto-update/readiness")
+def automatic_update_readiness() -> dict:
+    return auto_updater.readiness_status()
+
+
+@app.post("/api/auto-update/settings")
+def automatic_update_settings(body: AutoUpdateSettingsBody) -> dict:
+    try:
+        return auto_updater.save_settings(body.model_dump())
+    except UpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auto-update/check")
+def automatic_update_check() -> dict:
+    try:
+        return auto_updater.trigger_check()
+    except UpdateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/auto-update/update")
+def automatic_update_run(body: AutoUpdateRequestBody) -> dict:
+    try:
+        return auto_updater.trigger_update(after_current=body.after_current)
+    except UpdateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/auto-update/retry")
+def automatic_update_retry() -> dict:
+    try:
+        return auto_updater.retry()
+    except UpdateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/capabilities")

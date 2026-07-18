@@ -6,5 +6,6 @@ conda_env/
 data/
 logs/
 service/
+auto_update/
 .hub_token
 .fleet_token
