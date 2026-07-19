@@ -136,6 +136,41 @@ def test_cleanup_waits_for_ack_and_honors_pin(worker, tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_hard_cap_evicts_verified_oldest_and_protects_active(worker, monkeypatch):
+    monkeypatch.setattr(worker.time, "time", lambda: 1_000)
+    worker.SETTINGS_FILE.write_text(json.dumps({
+        "retention_days": 90, "storage_enabled": True,
+        "max_storage_gb": 80, "minimum_free_gb": 1,
+    }))
+    old = worker.OUTPUTS / "old.mp4"
+    active = worker.OUTPUTS / "active.mp4"
+    old.write_bytes(b"old-video")
+    active.write_bytes(b"active-video")
+    worker.jobs.update({
+        "old": {"id": "old", "state": "done", "acked_at": 900,
+                "output_path": str(old), "recipe": {"assets": []}},
+        "active": {"id": "active", "state": "running",
+                   "output_path": str(active), "recipe": {"assets": []}},
+    })
+
+    result = worker._cleanup_expired(target_bytes=0)
+
+    assert result["purged_jobs"] == 1
+    assert not old.exists()
+    assert active.exists()
+    assert worker.jobs["active"]["state"] == "running"
+
+
+def test_standard_storage_policy_api(worker):
+    client = TestClient(worker.app, headers={"X-Studio-Token": worker.FLEET_TOKEN})
+    response = client.put("/api/storage-policy", json={
+        "enabled": True, "retention_days": 3, "max_gb": 80,
+    })
+    assert response.status_code == 200
+    assert response.json()["retention_days"] == 3
+    assert response.json()["max_gb"] == 80
+
+
 def test_health_score_prefers_newer_chip_and_memory(worker, monkeypatch):
     monkeypatch.setattr(worker.platform, "system", lambda: "Other")
     monkeypatch.setattr(worker.platform, "processor", lambda: "Apple M4")

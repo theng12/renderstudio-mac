@@ -1,5 +1,21 @@
 # Render Studio KH Changelog
 
+## 0.7.1 - 2026-07-19
+
+- Changed the default verified-copy retention from seven days to three days and
+  added an enabled-by-default 80 GB hard cap across Render Studio outputs,
+  verified input objects, and job work data.
+- Cleanup now runs hourly without the dashboard being open. It first expires
+  old verified copies, then evicts the oldest acknowledged unpinned renders if
+  the hard cap is reached. Active, pinned, and not-yet-returned renders remain
+  protected even when the worker is over its limit.
+- Added modern worker controls for enabling cleanup, retention, storage cap,
+  free-disk reserve, Save policy & connection, and Clean now. Added the shared
+  authenticated `/api/storage-policy` contract for Studio Hub fleet control.
+- Added regression tests for oldest-first cap enforcement, active-render
+  protection, and fleet policy persistence. All tests and Python compilation
+  pass; FFmpeg execution, update logic, and launcher scripts are unchanged.
+
 ## 0.7.0 - 2026-07-19
 
 - Added the same optional Off, Notify only, and Automatic update controller

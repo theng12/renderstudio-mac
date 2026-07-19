@@ -29,8 +29,9 @@ copies reach their retention date and are removed.
 
 The Studio Hub address defaults to `http://127.0.0.1:47873`. Set it to the LAN
 or Tailscale address of the scheduling Hub when the worker uses a remote Hub.
-The dashboard also controls the verified-copy retention period and minimum free
-disk reserve.
+The dashboard also controls automatic local-backup cleanup, the verified-copy
+retention period, an 80 GB default hard cap, and the minimum free disk reserve.
+The default retention is three days.
 
 The header shows the exact installed release and opens **What's New**. The
 **Automatic updates** card provides independent Off (default), Notify only, and
@@ -51,6 +52,8 @@ version and answer healthy before the Hub advances to the next app.
 - Output must contain a video stream and pass a complete decode validation.
 - VideoToolbox is preferred. A failed hardware encode is retried with libx264.
 - Retention cleanup starts only after the main machine acknowledges receipt.
+- The hourly hard-cap sweep also deletes only acknowledged, unpinned completed
+  renders, oldest first. Active, pinned, and not-yet-returned work is protected.
 - Automatic updates require the fixed GitHub origin, `main`, a clean fast-
   forward, enough disk, successful dependency/import checks, an idle queue,
   and exact-version health after restart. A failed install attempts one bounded
@@ -71,6 +74,14 @@ saves `{mode, frequency, maintenance_hour, idle_only}` and verifies its local
 schedule. `POST /api/auto-update/check`, `/update`, and `/retry` start bounded
 background helpers; `/update` accepts `{"after_current": true}` for a durable
 idle retry.
+
+Storage policy endpoints use the same fleet authentication:
+
+```text
+GET  /api/storage-policy
+PUT  /api/storage-policy          # { enabled, retention_days, max_gb }
+POST /api/storage-policy/cleanup  # optional { target_bytes }
+```
 
 Submit a render with `POST /api/generate/render`:
 

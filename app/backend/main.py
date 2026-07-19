@@ -52,7 +52,11 @@ for directory in (OBJECTS, JOBS, OUTPUTS):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     restore_jobs()
-    yield
+    cleanup_task = asyncio.create_task(_storage_cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
 
 
 FLEET_TOKEN = load_token()
@@ -63,7 +67,7 @@ jobs: dict[str, dict] = {}
 tasks: dict[str, asyncio.Task] = {}
 worker_lock = asyncio.Lock()
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-RETENTION_CHOICES = {1, 3, 7, 15, 30}
+RETENTION_CHOICES = {1, 3, 7, 15, 30, 90}
 DEFAULT_HUB_URL = "http://127.0.0.1:47873"
 connection_cache: dict = {"checked_at": 0.0, "ok": False, "status": "not_tested"}
 storage_cache: dict = {"checked_at": 0.0}
@@ -83,9 +87,17 @@ class RenderRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
-    retention_days: int | None = Field(default=7)
+    retention_days: int | None = Field(default=3)
+    storage_enabled: bool = True
+    max_storage_gb: float = Field(default=80, ge=1, le=1000)
     minimum_free_gb: int = Field(default=20, ge=1, le=1000)
     hub_url: str = DEFAULT_HUB_URL
+
+
+class StoragePolicyRequest(BaseModel):
+    enabled: bool = True
+    retention_days: int = Field(default=3)
+    max_gb: float = Field(default=80, ge=1, le=1000)
 
 
 class AutoUpdateSettingsBody(BaseModel):
@@ -160,7 +172,8 @@ def _schedule_update_check() -> None:
 
 
 def _load_settings() -> dict:
-    defaults = {"retention_days": 7, "minimum_free_gb": 20,
+    defaults = {"retention_days": 3, "storage_enabled": True,
+                "max_storage_gb": 80.0, "minimum_free_gb": 20,
                 "hub_url": DEFAULT_HUB_URL}
     try:
         value = json.loads(SETTINGS_FILE.read_text())
@@ -168,7 +181,15 @@ def _load_settings() -> dict:
     except (OSError, json.JSONDecodeError):
         pass
     if defaults["retention_days"] not in RETENTION_CHOICES | {None}:
-        defaults["retention_days"] = 7
+        defaults["retention_days"] = 3
+    if not isinstance(defaults.get("storage_enabled"), bool):
+        defaults["storage_enabled"] = True
+    try:
+        defaults["max_storage_gb"] = float(defaults["max_storage_gb"])
+    except (TypeError, ValueError):
+        defaults["max_storage_gb"] = 80.0
+    if not 1 <= defaults["max_storage_gb"] <= 1000:
+        defaults["max_storage_gb"] = 80.0
     try:
         defaults["hub_url"] = _normalise_hub_url(defaults["hub_url"])
     except (TypeError, ValueError):
@@ -321,38 +342,94 @@ def _save_job(job: dict) -> None:
     (folder / "job.json").write_text(json.dumps(job, indent=2) + "\n")
 
 
-def _cleanup_expired() -> dict:
-    """Remove only acknowledged, unpinned work after its retention window."""
-    days = _load_settings()["retention_days"]
-    if days is None:
-        return {"purged_jobs": 0, "purged_objects": 0}
-    cutoff = time.time() - days * 86400
-    purged = 0
-    for job in jobs.values():
-        if (job.get("state") != "done" or job.get("pinned")
-                or not job.get("acked_at") or job["acked_at"] > cutoff):
-            continue
-        output_path = job.get("output_path")
-        if output_path:
-            Path(output_path).unlink(missing_ok=True)
-        work = JOBS / job["id"] / "work"
-        shutil.rmtree(work, ignore_errors=True)
-        job.update(state="purged", output_path=None, output_url=None,
-                   media=None, purged_at=time.time())
-        _save_job(job)
-        purged += 1
+def _purge_job(job: dict) -> None:
+    output_path = job.get("output_path")
+    if output_path:
+        Path(output_path).unlink(missing_ok=True)
+    shutil.rmtree(JOBS / job["id"] / "work", ignore_errors=True)
+    job.update(state="purged", output_path=None, output_url=None,
+               media=None, purged_at=time.time())
+    _save_job(job)
+
+
+def _remove_unreferenced_objects() -> int:
     referenced = {
         asset["sha256"].lower()
         for job in jobs.values() if job.get("state") != "purged"
         for asset in job.get("recipe", {}).get("assets", [])
         if asset.get("sha256")
     }
-    removed_objects = 0
+    removed = 0
     for obj in OBJECTS.iterdir():
         if obj.is_file() and obj.name not in referenced and not obj.name.endswith(".partial"):
             obj.unlink(missing_ok=True)
-            removed_objects += 1
-    return {"purged_jobs": purged, "purged_objects": removed_objects}
+            removed += 1
+    return removed
+
+
+def _cleanup_expired(target_bytes: int | None = None) -> dict:
+    """Expire verified copies, then enforce the hard cap oldest-first.
+
+    Only acknowledged, completed, unpinned renders are eligible. Active and
+    not-yet-returned renders remain protected even when the cap is exceeded.
+    """
+    settings = _load_settings()
+    before = _folder_bytes(DATA)
+    if not settings["storage_enabled"] and target_bytes is None:
+        return {"enabled": False, "purged_jobs": 0, "purged_objects": 0,
+                "deleted": 0, "freed_bytes": 0, "used_before_bytes": before,
+                "used_bytes": before}
+    eligible = sorted(
+        (job for job in jobs.values()
+         if job.get("state") == "done" and not job.get("pinned") and job.get("acked_at")),
+        key=lambda job: float(job.get("acked_at") or 0),
+    )
+    purged = 0
+    days = settings["retention_days"]
+    cutoff = time.time() - days * 86400 if days is not None else None
+    for job in eligible:
+        if cutoff is None or float(job.get("acked_at") or 0) > cutoff:
+            continue
+        _purge_job(job)
+        purged += 1
+    removed_objects = _remove_unreferenced_objects()
+    maximum = (max(0, int(target_bytes)) if target_bytes is not None
+               else round(settings["max_storage_gb"] * 1024 ** 3))
+    used = _folder_bytes(DATA)
+    for job in eligible:
+        if used <= maximum:
+            break
+        if job.get("state") != "done":
+            continue
+        _purge_job(job)
+        purged += 1
+        removed_objects += _remove_unreferenced_objects()
+        used = _folder_bytes(DATA)
+    storage_cache["checked_at"] = 0.0
+    used = _folder_bytes(DATA)
+    return {
+        "enabled": settings["storage_enabled"],
+        "retention_days": settings["retention_days"],
+        "max_gb": settings["max_storage_gb"],
+        "max_bytes": maximum,
+        "purged_jobs": purged,
+        "purged_objects": removed_objects,
+        "deleted": purged + removed_objects,
+        "freed_bytes": max(0, before - used),
+        "used_before_bytes": before,
+        "used_bytes": used,
+        "over_limit": used > maximum,
+    }
+
+
+async def _storage_cleanup_loop() -> None:
+    await asyncio.sleep(60)
+    while True:
+        try:
+            _cleanup_expired()
+        except Exception as exc:
+            print(f"[storage] automatic cleanup failed: {exc}", flush=True)
+        await asyncio.sleep(3600)
 
 
 def _hardware() -> dict:
@@ -670,7 +747,7 @@ def capabilities():
                              "animated-subtitles", "compilation-layout", "mov-export",
                              "webm-export",
                          ]}],
-            "retention": [1, 3, 7, 15, 30, "forever"]}
+            "retention": [1, 3, 7, 15, 30, 90, "forever"]}
 
 
 @app.get("/api/dashboard")
@@ -766,7 +843,7 @@ def get_settings():
 @app.put("/api/settings")
 def put_settings(request: SettingsRequest):
     if request.retention_days not in RETENTION_CHOICES | {None}:
-        raise HTTPException(400, "retention_days must be 1, 3, 7, 15, 30, or null")
+        raise HTTPException(400, "retention_days must be 1, 3, 7, 15, 30, 90, or null")
     value = request.model_dump()
     try:
         value["hub_url"] = _normalise_hub_url(value["hub_url"])
@@ -778,8 +855,45 @@ def put_settings(request: SettingsRequest):
 
 
 @app.post("/api/storage/cleanup")
-def cleanup():
-    return _cleanup_expired()
+def cleanup(body: dict | None = None):
+    body = body or {}
+    target = body.get("target_bytes")
+    if target is not None and (not isinstance(target, int) or target < 0):
+        raise HTTPException(400, "target_bytes must be a non-negative integer")
+    return _cleanup_expired(target)
+
+
+@app.get("/api/storage-policy")
+def get_storage_policy():
+    settings = _load_settings()
+    used = _folder_bytes(DATA)
+    maximum = round(settings["max_storage_gb"] * 1024 ** 3)
+    return {
+        "enabled": settings["storage_enabled"],
+        "retention_days": settings["retention_days"],
+        "max_gb": settings["max_storage_gb"],
+        "used_bytes": used,
+        "max_bytes": maximum,
+        "over_limit": settings["storage_enabled"] and used > maximum,
+        "scope": "render outputs and verified input cache",
+    }
+
+
+@app.put("/api/storage-policy")
+def put_storage_policy(request: StoragePolicyRequest):
+    if request.retention_days not in RETENTION_CHOICES:
+        raise HTTPException(400, "retention_days must be 1, 3, 7, 15, 30, or 90")
+    value = _load_settings()
+    value.update(storage_enabled=request.enabled,
+                 retention_days=request.retention_days,
+                 max_storage_gb=request.max_gb)
+    SETTINGS_FILE.write_text(json.dumps(value, indent=2) + "\n")
+    return get_storage_policy()
+
+
+@app.post("/api/storage-policy/cleanup")
+def cleanup_storage_policy(body: dict | None = None):
+    return cleanup(body)
 
 
 @app.delete("/api/storage/jobs/{job_id}")
