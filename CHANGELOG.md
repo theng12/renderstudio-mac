@@ -1,5 +1,15 @@
 # Render Studio KH Changelog
 
+## 0.7.2 - 2026-07-20
+
+- Render failures now include a bounded tail of the actual FFmpeg or FFprobe
+  diagnostic instead of only reporting an opaque step number. Worker-local
+  data paths are scrubbed before the error travels through Studio Hub.
+- Added regression coverage for diagnostic bounds, path scrubbing, and the
+  error propagated by a failed render step.
+- Added the 0.7.2 dashboard What's New details and a release-integrity test that
+  requires the current version in both the changelog and in-product notes.
+
 ## 0.7.1 - 2026-07-19
 
 - Changed the default verified-copy retention from seven days to three days and

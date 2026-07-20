@@ -99,6 +99,49 @@ def test_placeholder_resolution(worker, tmp_path):
     assert str(tmp_path / "fonts") in value
 
 
+def test_process_failure_detail_is_bounded_and_scrubs_worker_paths(worker):
+    log = worker.JOBS / "failure.log"
+    old = "old command output\n"
+    log.write_text(old)
+    start = len(old.encode())
+    private_path = worker.DATA / "jobs" / "secret" / "work" / "scene.mp4"
+    log.write_text(old + (f"failed to open {private_path}\n" * 200))
+
+    detail = worker._process_failure_detail(log, start)
+
+    assert len(detail) <= 1600
+    assert "failed to open" in detail
+    assert str(worker.DATA) not in detail
+    assert "<render-data>" in detail
+    assert "old command output" not in detail
+
+
+def test_render_job_surfaces_bounded_ffmpeg_failure_detail(worker, monkeypatch):
+    async def fail_process(_argv, log):
+        with log.open("a") as handle:
+            handle.write(f"Invalid data found in {worker.DATA / 'jobs' / 'job' / 'work'}\n")
+        return 1
+
+    monkeypatch.setattr(worker, "_run_process", fail_process)
+    monkeypatch.setattr(worker, "_tool_path", lambda name: name)
+    monkeypatch.setattr(worker, "_has_videotoolbox", lambda: True)
+    job = {
+        "id": "failed-render", "state": "queued", "progress": 0,
+        "recipe": {
+            "version": 1, "assets": [], "steps": [{
+                "tool": "ffmpeg", "args": ["-y", "{{output}}"],
+            }],
+        },
+    }
+
+    asyncio.run(worker._render(job))
+
+    assert job["state"] == "error"
+    assert job["error"].startswith("ffmpeg step 1 failed:")
+    assert "Invalid data found" in job["error"]
+    assert str(worker.DATA) not in job["error"]
+
+
 def test_download_retries_transient_hub_asset_error(worker):
     payload = b"durable render input"
     checksum = hashlib.sha256(payload).hexdigest()
@@ -187,6 +230,16 @@ def test_version_contract_uses_release_file(worker):
     assert payload["app_version"] == expected
     assert payload["version"] == expected
     assert payload["title"] == "Render Studio KH"
+
+
+def test_current_release_is_in_changelog_and_whats_new(worker):
+    root = Path(worker.__file__).parents[2]
+    expected = (root / "VERSION").read_text().strip()
+    changelog = (root / "CHANGELOG.md").read_text()
+    html = (root / "app" / "frontend" / "index.html").read_text()
+
+    assert f"## {expected} " in changelog
+    assert f">{expected} /" in html
 
 
 def test_update_status_compares_semantic_versions(worker, monkeypatch):

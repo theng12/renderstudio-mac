@@ -578,6 +578,21 @@ async def _run_process(argv: list[str], log: Path) -> int:
         return await process.wait()
 
 
+def _process_failure_detail(log: Path, start_offset: int, max_chars: int = 1600) -> str:
+    """Return a bounded, path-scrubbed tail for the command that just failed."""
+    try:
+        size = log.stat().st_size
+        with log.open("rb") as handle:
+            handle.seek(max(start_offset, size - 8192))
+            raw = handle.read()
+    except OSError:
+        return ""
+    text = raw.decode(errors="replace").replace(str(DATA), "<render-data>")
+    lines = [re.sub(r"\s+", " ", line).strip()
+             for line in text.splitlines() if line.strip()]
+    return " | ".join(lines[-12:])[-max_chars:]
+
+
 async def _validate_output(output: Path, log: Path) -> dict:
     if not output.exists() or output.stat().st_size == 0:
         raise ValueError("render produced no output")
@@ -628,6 +643,7 @@ async def _render(job: dict) -> None:
                 if not tool:
                     raise ValueError(f"{step['tool']} is not installed")
                 args = [_resolve_arg(arg, assets, work, output, encoder) for arg in step["args"]]
+                log_start = log.stat().st_size if log.exists() else 0
                 code = await _run_process([tool, *args], log)
                 if code and encoder == "h264_videotoolbox" and step["tool"] == "ffmpeg":
                     fallback = [_resolve_arg(arg, assets, work, output, "libx264")
@@ -636,7 +652,11 @@ async def _render(job: dict) -> None:
                     if code == 0:
                         encoder = "libx264"
                 if code:
-                    raise ValueError(f"{step['tool']} step {index + 1} failed")
+                    message = f"{step['tool']} step {index + 1} failed"
+                    detail = _process_failure_detail(log, log_start)
+                    if detail:
+                        message = f"{message}: {detail}"
+                    raise ValueError(message)
                 job["progress"] = 0.3 + 0.6 * ((index + 1) / len(recipe["steps"]))
                 _save_job(job)
             metadata = await _validate_output(output, log)
