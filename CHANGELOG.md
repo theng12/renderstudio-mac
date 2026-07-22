@@ -1,5 +1,19 @@
 # Render Studio KH Changelog
 
+## 0.7.4 - 2026-07-23
+
+- Changed the service watchdog from restarting after one missed health probe to
+  requiring three consecutive failures. A successful probe immediately clears
+  the repo-local failure counter, so isolated network or event-loop delays do
+  not interrupt a healthy render worker.
+- Added validated environment overrides for test and advanced deployments; a
+  missing, non-numeric, or unsafe one-failure threshold falls back to three.
+  The counter remains under the already git-ignored `service/` runtime folder.
+- Added subprocess regression coverage for the three-failure threshold,
+  immediate success reset, invalid override handling, and ignored state path.
+  Render execution, queueing, updater behavior, and live services were
+  deliberately unchanged, and no running render was restarted for this patch.
+
 ## 0.7.3 - 2026-07-23
 
 - Fixed automatic-update availability so only a semantically newer published
