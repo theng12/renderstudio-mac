@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import inspect
 import json
 import os
 import platform
@@ -77,6 +79,27 @@ UPDATE_VERSION_URL = f"https://api.github.com/repos/{UPDATE_REPO}/contents/VERSI
 UPDATE_CHECK_SECONDS = 6 * 3600
 update_state: dict = {"checked_at": 0.0, "latest": None, "checking": False}
 update_lock = threading.Lock()
+
+
+def _bounded_env_seconds(name: str, default: float, minimum: float,
+                         maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+PROCESS_TIMEOUT_SECONDS = _bounded_env_seconds(
+    "RENDERSTUDIO_PROCESS_TIMEOUT_SECONDS", 12 * 60 * 60, 60, 24 * 60 * 60)
+PROCESS_HEARTBEAT_SECONDS = _bounded_env_seconds(
+    "RENDERSTUDIO_PROCESS_HEARTBEAT_SECONDS", 15, 1, 300)
+PROCESS_TERMINATE_GRACE_SECONDS = _bounded_env_seconds(
+    "RENDERSTUDIO_PROCESS_TERMINATE_GRACE_SECONDS", 10, 1, 60)
+
+
+class RenderProcessTimeout(RuntimeError):
+    """A supervised FFmpeg process exceeded its configured runtime ceiling."""
 
 
 class RenderRequest(BaseModel):
@@ -571,11 +594,78 @@ def _resolve_arg(arg: str, assets: dict[str, Path], work: Path, output: Path,
     return value
 
 
-async def _run_process(argv: list[str], log: Path) -> int:
+async def _stop_process(process: asyncio.subprocess.Process,
+                        waiter: asyncio.Task, grace_seconds: float) -> None:
+    """Stop and reap a child process before returning to the render task."""
+    if process.returncode is not None:
+        await waiter
+        return
+    with contextlib.suppress(ProcessLookupError):
+        process.terminate()
+    try:
+        await asyncio.wait_for(asyncio.shield(waiter), timeout=grace_seconds)
+        return
+    except asyncio.TimeoutError:
+        pass
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+    await waiter
+
+
+async def _run_process(
+    argv: list[str],
+    log: Path,
+    *,
+    timeout_seconds: float = PROCESS_TIMEOUT_SECONDS,
+    heartbeat_seconds: float = PROCESS_HEARTBEAT_SECONDS,
+    termination_grace_seconds: float = PROCESS_TERMINATE_GRACE_SECONDS,
+    on_heartbeat=None,
+) -> int:
+    """Run one FFmpeg command with heartbeats and guaranteed child cleanup."""
+    timeout_seconds = max(0.01, float(timeout_seconds))
+    heartbeat_seconds = max(0.01, min(float(heartbeat_seconds), timeout_seconds))
+    termination_grace_seconds = max(0.01, float(termination_grace_seconds))
     with log.open("ab") as handle:
         process = await asyncio.create_subprocess_exec(
             *argv, stdout=handle, stderr=asyncio.subprocess.STDOUT)
-        return await process.wait()
+        waiter = asyncio.create_task(process.wait())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(waiter),
+                        timeout=min(heartbeat_seconds, remaining),
+                    )
+                except asyncio.TimeoutError:
+                    if loop.time() >= deadline:
+                        raise
+                    if on_heartbeat is not None:
+                        result = on_heartbeat()
+                        if inspect.isawaitable(result):
+                            await result
+        except asyncio.TimeoutError as exc:
+            await _stop_process(process, waiter, termination_grace_seconds)
+            handle.write(
+                f"\n[renderstudio] process timed out after {timeout_seconds:g} seconds\n".encode()
+            )
+            handle.flush()
+            raise RenderProcessTimeout(
+                f"{Path(argv[0]).name} exceeded the {timeout_seconds:g}-second runtime limit"
+            ) from exc
+        except asyncio.CancelledError:
+            await _stop_process(process, waiter, termination_grace_seconds)
+            handle.write(b"\n[renderstudio] process cancelled and stopped\n")
+            handle.flush()
+            raise
+        except BaseException:
+            await _stop_process(process, waiter, termination_grace_seconds)
+            raise
 
 
 def _process_failure_detail(log: Path, start_offset: int, max_chars: int = 1600) -> str:
@@ -593,7 +683,7 @@ def _process_failure_detail(log: Path, start_offset: int, max_chars: int = 1600)
     return " | ".join(lines[-12:])[-max_chars:]
 
 
-async def _validate_output(output: Path, log: Path) -> dict:
+async def _validate_output(output: Path, log: Path, on_heartbeat=None) -> dict:
     if not output.exists() or output.stat().st_size == 0:
         raise ValueError("render produced no output")
     probe = await asyncio.create_subprocess_exec(
@@ -609,7 +699,7 @@ async def _validate_output(output: Path, log: Path) -> dict:
         raise ValueError("output has no video stream")
     decode_code = await _run_process([
         _tool_path("ffmpeg") or "ffmpeg", "-v", "error", "-i", str(output),
-        "-f", "null", "-"], log)
+        "-f", "null", "-"], log, on_heartbeat=on_heartbeat)
     if decode_code:
         raise ValueError("full output decode validation failed")
     return metadata
@@ -627,6 +717,12 @@ async def _render(job: dict) -> None:
         output = OUTPUTS / f"{job['id']}.partial.{extension}"
         final = OUTPUTS / f"{job['id']}.{extension}"
         try:
+            def heartbeat() -> None:
+                job["last_heartbeat_at"] = time.time()
+                job["duration_seconds"] = round(
+                    job["last_heartbeat_at"] - job["started_at"], 2)
+                _save_job(job)
+
             recipe = job["recipe"]
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 assets = {}
@@ -644,11 +740,12 @@ async def _render(job: dict) -> None:
                     raise ValueError(f"{step['tool']} is not installed")
                 args = [_resolve_arg(arg, assets, work, output, encoder) for arg in step["args"]]
                 log_start = log.stat().st_size if log.exists() else 0
-                code = await _run_process([tool, *args], log)
+                code = await _run_process([tool, *args], log, on_heartbeat=heartbeat)
                 if code and encoder == "h264_videotoolbox" and step["tool"] == "ffmpeg":
                     fallback = [_resolve_arg(arg, assets, work, output, "libx264")
                                 for arg in step["args"]]
-                    code = await _run_process([tool, *fallback], log)
+                    code = await _run_process(
+                        [tool, *fallback], log, on_heartbeat=heartbeat)
                     if code == 0:
                         encoder = "libx264"
                 if code:
@@ -659,7 +756,7 @@ async def _render(job: dict) -> None:
                     raise ValueError(message)
                 job["progress"] = 0.3 + 0.6 * ((index + 1) / len(recipe["steps"]))
                 _save_job(job)
-            metadata = await _validate_output(output, log)
+            metadata = await _validate_output(output, log, on_heartbeat=heartbeat)
             output.replace(final)
             job.update(state="done", progress=1.0, output_path=str(final),
                        output_url=f"/api/outputs/{job['id']}",
@@ -670,6 +767,9 @@ async def _render(job: dict) -> None:
                 job["video_seconds"] = max(0.0, float(metadata.get("format", {}).get("duration", 0)))
             except (TypeError, ValueError):
                 job["video_seconds"] = 0.0
+        except asyncio.CancelledError:
+            job.update(state="cancelled", finished_at=time.time())
+            raise
         except Exception as exc:
             job.update(state="error", error=str(exc), finished_at=time.time())
         finally:
@@ -833,13 +933,15 @@ def pin(job_id: str, pinned: bool = True):
 
 
 @app.delete("/api/generate/jobs/{job_id}")
-def cancel(job_id: str):
+async def cancel(job_id: str):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(404, "unknown job")
     task = tasks.get(job_id)
     if task and not task.done():
         task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     job.update(state="cancelled", finished_at=time.time())
     _save_job(job)
     return {"ok": True}

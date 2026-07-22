@@ -4,14 +4,32 @@ module.exports = {
   description: "Episode-level FFmpeg render worker for the Story Studio fleet.",
   icon: "icon.png",
   menu: async (kernel, info) => {
+    const installed = info.exists("conda_env")
     const serviceInstalled = info.exists("service/.installed")
     const serviceUrl = "http://localhost:47874"
     const serviceItem = { icon: "fa-solid fa-heart-pulse", text: "Install as Startup Service", href: "service.js" }
-    if (info.running("install.js")) {
-      return [{ default: true, icon: "fa-solid fa-plug", text: "Installing", href: "install.js" }]
+    const whatsNewItem = {
+      icon: "fa-solid fa-bullhorn",
+      text: "What's New · Updates & Details",
+      href: "CHANGELOG.md"
     }
-    if (!info.exists("conda_env")) {
-      return [{ default: true, icon: "fa-solid fa-plug", text: "Install", href: "install.js" }]
+    const running = {
+      install: info.running("install.js"),
+      start: info.running("start.js"),
+      update: info.running("update.js"),
+      reset: info.running("reset.js")
+    }
+    if (running.install) {
+      return [{ default: true, icon: "fa-solid fa-plug", text: "Installing", href: "install.js" }, whatsNewItem]
+    }
+    if (running.update) {
+      return [{ default: true, icon: "fa-solid fa-rotate", text: "Updating", href: "update.js" }, whatsNewItem]
+    }
+    if (running.reset) {
+      return [{ default: true, icon: "fa-solid fa-broom", text: "Resetting", href: "reset.js" }, whatsNewItem]
+    }
+    if (!installed) {
+      return [{ default: true, icon: "fa-solid fa-plug", text: "Install", href: "install.js" }, whatsNewItem]
     }
     if (serviceInstalled) {
       return [
@@ -22,29 +40,35 @@ module.exports = {
         { icon: "fa-solid fa-folder-open", text: "Service Logs", href: "logs/service?fs=true" },
         { icon: "fa-solid fa-folder-open", text: "Retained Videos", href: "data/outputs?fs=true" },
         { icon: "fa-regular fa-circle-xmark", text: "Uninstall Startup Service", href: "unservice.js" },
-        { icon: "fa-solid fa-rotate", text: "Update", href: "update.js" }
+        { icon: "fa-solid fa-rotate", text: "Update", href: "update.js" },
+        whatsNewItem
       ]
     }
-    if (info.running("start.js")) {
+    if (running.start) {
       const local = info.local("start.js")
       if (local && local.url) {
         return [
-          { default: true, icon: "fa-solid fa-film", text: "Open Render Studio", href: `${local.url}/?_cb=${Date.now()}` },
-          { icon: "fa-solid fa-terminal", text: "Worker Log", href: "start.js" },
+          { default: true, icon: "fa-solid fa-film", text: "Open UI", href: `${local.url}/?_cb=${Date.now()}` },
+          { icon: "fa-solid fa-terminal", text: "Terminal", href: "start.js" },
           { icon: "fa-solid fa-folder-open", text: "Retained Videos", href: "data/outputs?fs=true" },
           { icon: "fa-solid fa-rotate", text: "Update", href: "update.js" },
-          serviceItem
+          serviceItem,
+          whatsNewItem
         ]
       }
-      return [{ default: true, icon: "fa-solid fa-terminal", text: "Starting", href: "start.js" }]
+      return [
+        { default: true, icon: "fa-solid fa-terminal", text: "Terminal", href: "start.js" },
+        whatsNewItem
+      ]
     }
     return [
       { default: true, icon: "fa-solid fa-power-off", text: "Start", href: "start.js" },
-      { icon: "fa-solid fa-heart-pulse", text: "Install as Startup Service", href: "service.js" },
       { icon: "fa-solid fa-folder-open", text: "Retained Videos", href: "data/outputs?fs=true" },
+      serviceItem,
       { icon: "fa-solid fa-rotate", text: "Update", href: "update.js" },
       { icon: "fa-solid fa-plug", text: "Reinstall", href: "install.js" },
-      { icon: "fa-regular fa-circle-xmark", text: "Reset", href: "reset.js" }
+      { icon: "fa-regular fa-circle-xmark", text: "Reset", href: "reset.js" },
+      whatsNewItem
     ]
   }
 }

@@ -1,5 +1,24 @@
 # Render Studio KH Changelog
 
+## 0.7.3 - 2026-07-23
+
+- Fixed automatic-update availability so only a semantically newer published
+  release is offered. An installed version newer than or equal to the remote
+  release can no longer be presented as a downgrade through Update now.
+- Added bounded FFmpeg supervision with a 12-hour default process ceiling,
+  persisted 15-second job heartbeats, and terminate-then-kill cleanup. Timeout
+  and cancellation now wait until the child is reaped before the partial output
+  is removed or the cancellation API returns, preventing orphan writes.
+- Aligned the Pinokio sidebar with sibling Studios: Updating and Resetting have
+  visible running states, Open UI and Terminal use common names, and What's New
+  remains available in install, update, reset, service, running, and idle menus.
+- Raised dashboard labels, status text, badges, and controls to the shared
+  readable minimum of 12 px text, 15 px controls, and 40 px control height.
+- Added regression coverage for downgrade refusal, live heartbeat delivery,
+  forced timeout cleanup, cancellation cleanup, readable UI sizing, sidebar
+  state feedback, and release-note integrity. Rendering recipes, storage policy,
+  Studio Hub scheduling, and encoder selection were deliberately unchanged.
+
 ## 0.7.2 - 2026-07-20
 
 - Render failures now include a bounded tail of the actual FFmpeg or FFprobe

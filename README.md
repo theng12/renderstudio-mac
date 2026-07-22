@@ -51,6 +51,10 @@ version and answer healthy before the Hub advances to the next app.
   before rendering begins.
 - Output must contain a video stream and pass a complete decode validation.
 - VideoToolbox is preferred. A failed hardware encode is retried with libx264.
+- Every FFmpeg process records a job heartbeat every 15 seconds and has a
+  12-hour default runtime ceiling. Timeout and cancellation first terminate,
+  then force-kill if necessary, and always reap the process before partial
+  output cleanup continues.
 - Retention cleanup starts only after the main machine acknowledges receipt.
 - The hourly hard-cap sweep also deletes only acknowledged, unpinned completed
   renders, oldest first. Active, pinned, and not-yet-returned work is protected.
@@ -58,6 +62,12 @@ version and answer healthy before the Hub advances to the next app.
   forward, enough disk, successful dependency/import checks, an idle queue,
   and exact-version health after restart. A failed install attempts one bounded
   rollback and records redacted logs under `logs/auto_update/`.
+
+Advanced service deployments can tune process supervision with
+`RENDERSTUDIO_PROCESS_TIMEOUT_SECONDS` (60 seconds to 24 hours),
+`RENDERSTUDIO_PROCESS_HEARTBEAT_SECONDS` (1 to 300 seconds), and
+`RENDERSTUDIO_PROCESS_TERMINATE_GRACE_SECONDS` (1 to 60 seconds). Invalid or
+out-of-range values fall back to, or are clamped within, those safety bounds.
 
 ## API
 

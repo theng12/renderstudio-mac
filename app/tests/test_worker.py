@@ -2,7 +2,11 @@ import asyncio
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
+import re
+import sys
+import time
 
 import httpx
 import pytest
@@ -117,7 +121,7 @@ def test_process_failure_detail_is_bounded_and_scrubs_worker_paths(worker):
 
 
 def test_render_job_surfaces_bounded_ffmpeg_failure_detail(worker, monkeypatch):
-    async def fail_process(_argv, log):
+    async def fail_process(_argv, log, **_kwargs):
         with log.open("a") as handle:
             handle.write(f"Invalid data found in {worker.DATA / 'jobs' / 'job' / 'work'}\n")
         return 1
@@ -140,6 +144,87 @@ def test_render_job_surfaces_bounded_ffmpeg_failure_detail(worker, monkeypatch):
     assert job["error"].startswith("ffmpeg step 1 failed:")
     assert "Invalid data found" in job["error"]
     assert str(worker.DATA) not in job["error"]
+
+
+def test_process_timeout_kills_and_reaps_ffmpeg_child(worker, tmp_path):
+    marker = tmp_path / "timeout.pid"
+    log = tmp_path / "timeout.log"
+    heartbeats = []
+    script = """
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(sys.argv[1]).write_text(str(os.getpid()))
+while True:
+    print("still rendering", flush=True)
+    time.sleep(0.01)
+"""
+
+    with pytest.raises(worker.RenderProcessTimeout, match="runtime limit"):
+        asyncio.run(worker._run_process(
+            [sys.executable, "-c", script, str(marker)],
+            log,
+            timeout_seconds=0.2,
+            heartbeat_seconds=0.03,
+            termination_grace_seconds=0.05,
+            on_heartbeat=lambda: heartbeats.append(time.monotonic()),
+        ))
+
+    pid = int(marker.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    assert heartbeats
+    assert "process timed out" in log.read_text()
+    settled_size = log.stat().st_size
+    time.sleep(0.05)
+    assert log.stat().st_size == settled_size
+
+
+def test_process_cancellation_terminates_child_before_return(worker, tmp_path):
+    marker = tmp_path / "cancel.pid"
+    log = tmp_path / "cancel.log"
+    script = """
+import os
+from pathlib import Path
+import sys
+import time
+
+Path(sys.argv[1]).write_text(str(os.getpid()))
+while True:
+    print("still rendering", flush=True)
+    time.sleep(0.01)
+"""
+
+    async def cancel_running_process():
+        task = asyncio.create_task(worker._run_process(
+            [sys.executable, "-c", script, str(marker)],
+            log,
+            timeout_seconds=30,
+            heartbeat_seconds=0.03,
+            termination_grace_seconds=0.2,
+        ))
+        deadline = asyncio.get_running_loop().time() + 2
+        while not marker.exists():
+            if asyncio.get_running_loop().time() >= deadline:
+                pytest.fail("child process did not start")
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_running_process())
+
+    pid = int(marker.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    assert "process cancelled and stopped" in log.read_text()
+    settled_size = log.stat().st_size
+    time.sleep(0.05)
+    assert log.stat().st_size == settled_size
 
 
 def test_download_retries_transient_hub_asset_error(worker):
@@ -379,6 +464,24 @@ def test_dashboard_ui_exposes_status_history_and_whats_new():
     assert 'id="automatic-updates"' in html
     assert "Update after current work" in html
     assert "0.7.0 / Safe automatic updates" in html
+
+
+def test_dashboard_enforces_readable_text_and_control_minimums():
+    html = (Path(__file__).parents[1] / "frontend" / "index.html").read_text()
+    assert not re.search(r"font(?:-size)?:[^;}]*\b(?:9|10|11)px\b", html)
+    assert "button,input,select{min-height:40px;font:600 15px/1.2" in html
+
+
+def test_pinokio_sidebar_has_progress_and_whats_new_in_every_state():
+    source = (Path(__file__).parents[2] / "pinokio.js").read_text()
+    assert 'update: info.running("update.js")' in source
+    assert 'reset: info.running("reset.js")' in source
+    assert 'text: "Updating"' in source
+    assert 'text: "Resetting"' in source
+    assert 'text: "Open UI"' in source
+    assert 'text: "Terminal"' in source
+    # Declaration plus all eight state-specific menu returns.
+    assert source.count("whatsNewItem") == 9
 
 
 def test_automatic_update_readiness_tracks_running_and_queued_renders(worker):
