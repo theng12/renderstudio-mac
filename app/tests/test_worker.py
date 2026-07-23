@@ -299,6 +299,30 @@ def test_standard_storage_policy_api(worker):
     assert response.json()["max_gb"] == 80
 
 
+def test_legacy_three_day_policy_migrates_once_to_thirty_days(worker):
+    worker.SETTINGS_FILE.write_text(json.dumps({
+        "retention_days": 3,
+        "storage_enabled": True,
+        "max_storage_gb": 80,
+        "minimum_free_gb": 20,
+        "hub_url": worker.DEFAULT_HUB_URL,
+    }))
+
+    assert worker._load_settings()["retention_days"] == 30
+    migrated = json.loads(worker.SETTINGS_FILE.read_text())
+    assert migrated["retention_days"] == 30
+    assert migrated["storage_policy_version"] == worker.STORAGE_POLICY_VERSION
+
+    client = TestClient(
+        worker.app, headers={"X-Studio-Token": worker.FLEET_TOKEN}
+    )
+    response = client.put("/api/storage-policy", json={
+        "enabled": True, "retention_days": 3, "max_gb": 80,
+    })
+    assert response.status_code == 200
+    assert worker._load_settings()["retention_days"] == 3
+
+
 def test_health_score_prefers_newer_chip_and_memory(worker, monkeypatch):
     monkeypatch.setattr(worker.platform, "system", lambda: "Other")
     monkeypatch.setattr(worker.platform, "processor", lambda: "Apple M4")

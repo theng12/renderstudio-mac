@@ -96,6 +96,7 @@ PROCESS_HEARTBEAT_SECONDS = _bounded_env_seconds(
     "RENDERSTUDIO_PROCESS_HEARTBEAT_SECONDS", 15, 1, 300)
 PROCESS_TERMINATE_GRACE_SECONDS = _bounded_env_seconds(
     "RENDERSTUDIO_PROCESS_TERMINATE_GRACE_SECONDS", 10, 1, 60)
+STORAGE_POLICY_VERSION = 2
 
 
 class RenderProcessTimeout(RuntimeError):
@@ -110,7 +111,7 @@ class RenderRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
-    retention_days: int | None = Field(default=3)
+    retention_days: int | None = Field(default=30)
     storage_enabled: bool = True
     max_storage_gb: float = Field(default=80, ge=1, le=1000)
     minimum_free_gb: int = Field(default=20, ge=1, le=1000)
@@ -119,7 +120,7 @@ class SettingsRequest(BaseModel):
 
 class StoragePolicyRequest(BaseModel):
     enabled: bool = True
-    retention_days: int = Field(default=3)
+    retention_days: int = Field(default=30)
     max_gb: float = Field(default=80, ge=1, le=1000)
 
 
@@ -195,16 +196,21 @@ def _schedule_update_check() -> None:
 
 
 def _load_settings() -> dict:
-    defaults = {"retention_days": 3, "storage_enabled": True,
+    defaults = {"retention_days": 30, "storage_enabled": True,
                 "max_storage_gb": 80.0, "minimum_free_gb": 20,
-                "hub_url": DEFAULT_HUB_URL}
+                "hub_url": DEFAULT_HUB_URL,
+                "storage_policy_version": STORAGE_POLICY_VERSION}
+    value = {}
     try:
         value = json.loads(SETTINGS_FILE.read_text())
-        defaults.update(value)
+        if isinstance(value, dict):
+            defaults.update(value)
+        else:
+            value = {}
     except (OSError, json.JSONDecodeError):
         pass
     if defaults["retention_days"] not in RETENTION_CHOICES | {None}:
-        defaults["retention_days"] = 3
+        defaults["retention_days"] = 30
     if not isinstance(defaults.get("storage_enabled"), bool):
         defaults["storage_enabled"] = True
     try:
@@ -217,6 +223,17 @@ def _load_settings() -> dict:
         defaults["hub_url"] = _normalise_hub_url(defaults["hub_url"])
     except (TypeError, ValueError):
         defaults["hub_url"] = DEFAULT_HUB_URL
+    try:
+        policy_version = int(value.get("storage_policy_version", 1))
+    except (TypeError, ValueError):
+        policy_version = 1
+    if (
+        value
+        and policy_version < STORAGE_POLICY_VERSION
+        and defaults["retention_days"] == 3
+    ):
+        defaults["retention_days"] = 30
+        SETTINGS_FILE.write_text(json.dumps(defaults, indent=2) + "\n")
     return defaults
 
 
@@ -967,6 +984,7 @@ def put_settings(request: SettingsRequest):
     if request.retention_days not in RETENTION_CHOICES | {None}:
         raise HTTPException(400, "retention_days must be 1, 3, 7, 15, 30, 90, or null")
     value = request.model_dump()
+    value["storage_policy_version"] = STORAGE_POLICY_VERSION
     try:
         value["hub_url"] = _normalise_hub_url(value["hub_url"])
     except ValueError as exc:
@@ -1008,7 +1026,8 @@ def put_storage_policy(request: StoragePolicyRequest):
     value = _load_settings()
     value.update(storage_enabled=request.enabled,
                  retention_days=request.retention_days,
-                 max_storage_gb=request.max_gb)
+                 max_storage_gb=request.max_gb,
+                 storage_policy_version=STORAGE_POLICY_VERSION)
     SETTINGS_FILE.write_text(json.dumps(value, indent=2) + "\n")
     return get_storage_policy()
 

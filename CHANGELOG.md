@@ -1,5 +1,16 @@
 # Render Studio KH Changelog
 
+## 0.7.5 - 2026-07-23
+
+- Raised verified render-copy retention from 3 days to 30 days while preserving
+  the existing 80 GB hard cap, oldest-first cleanup, active-job protection, and
+  pinned-output protection.
+- Existing saved 3-day settings migrate automatically once during update.
+  Explicit choices saved afterward remain respected, so online and reconnecting
+  workers require no individual configuration.
+- Added regression coverage for legacy migration, persisted migration metadata,
+  and explicit post-migration policy choices. **Just run Update.**
+
 ## 0.7.4 - 2026-07-23
 
 - Changed the service watchdog from restarting after one missed health probe to
