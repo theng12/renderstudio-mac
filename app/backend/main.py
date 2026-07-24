@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from .fleet_auth import load_token, make_middleware
 from .auto_update import UpdateError
 from .auto_update_config import create_updater
+from .restart_health import restart_rate_snapshot
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +80,10 @@ UPDATE_VERSION_URL = f"https://api.github.com/repos/{UPDATE_REPO}/contents/VERSI
 UPDATE_CHECK_SECONDS = 6 * 3600
 update_state: dict = {"checked_at": 0.0, "latest": None, "checking": False}
 update_lock = threading.Lock()
+memory_recovery_state: dict = {
+    "consecutive_failures": 0,
+    "last_event": None,
+}
 
 
 def _bounded_env_seconds(name: str, default: float, minimum: float,
@@ -101,6 +106,55 @@ STORAGE_POLICY_VERSION = 2
 
 class RenderProcessTimeout(RuntimeError):
     """A supervised FFmpeg process exceeded its configured runtime ceiling."""
+
+
+_MEMORY_FAILURE_MARKERS = (
+    "out of memory",
+    "cannot allocate memory",
+    "failed to allocate memory",
+    "error allocating memory",
+    "memory allocation failed",
+    "std::bad_alloc",
+    "av_malloc",
+)
+
+
+def _memory_snapshot() -> dict:
+    """Return current machine memory totals without process or customer data."""
+    memory = psutil.virtual_memory()
+    return {
+        "total_bytes": int(memory.total),
+        "available_bytes": int(memory.available),
+        "used_percent": round(float(memory.percent), 1),
+    }
+
+
+def _is_process_memory_failure(detail: str) -> bool:
+    """Classify only explicit allocator/OOM diagnostics as memory failures."""
+    normalized = str(detail or "").casefold()
+    return any(marker in normalized for marker in _MEMORY_FAILURE_MARKERS)
+
+
+def _record_process_memory_failure() -> None:
+    memory_recovery_state["consecutive_failures"] += 1
+    memory_recovery_state["last_event"] = {
+        "observed_at": time.time(),
+        "type": "ffmpeg_memory_allocation_failure",
+        "memory": _memory_snapshot(),
+    }
+
+
+def _reset_process_memory_failures() -> None:
+    memory_recovery_state["consecutive_failures"] = 0
+
+
+def _memory_recovery_status() -> dict:
+    return {
+        "strategy": "retry_ffmpeg_once",
+        "parent_restart_on_ffmpeg_oom": False,
+        "consecutive_failures": int(memory_recovery_state["consecutive_failures"]),
+        "last_event": memory_recovery_state["last_event"],
+    }
 
 
 class RenderRequest(BaseModel):
@@ -700,6 +754,48 @@ def _process_failure_detail(log: Path, start_offset: int, max_chars: int = 1600)
     return " | ".join(lines[-12:])[-max_chars:]
 
 
+async def _run_ffmpeg_with_memory_retry(
+    argv: list[str],
+    log: Path,
+    *,
+    on_heartbeat=None,
+    cleanup_path: Path | None = None,
+) -> int:
+    """Retry one verified FFmpeg allocator failure without restarting the server."""
+    start_offset = log.stat().st_size if log.exists() else 0
+    cleanup_existed = bool(cleanup_path and cleanup_path.exists())
+    code = await _run_process(argv, log, on_heartbeat=on_heartbeat)
+    if code == 0:
+        _reset_process_memory_failures()
+        return code
+
+    detail = _process_failure_detail(log, start_offset)
+    if not _is_process_memory_failure(detail):
+        _reset_process_memory_failures()
+        return code
+
+    _record_process_memory_failure()
+    if cleanup_path is not None and not cleanup_existed:
+        cleanup_path.unlink(missing_ok=True)
+    with log.open("ab") as handle:
+        handle.write(
+            b"\n[renderstudio] verified FFmpeg memory failure; retrying once\n"
+        )
+
+    retry_offset = log.stat().st_size
+    retry_code = await _run_process(argv, log, on_heartbeat=on_heartbeat)
+    if retry_code == 0:
+        _reset_process_memory_failures()
+        return retry_code
+
+    retry_detail = _process_failure_detail(log, retry_offset)
+    if _is_process_memory_failure(retry_detail):
+        _record_process_memory_failure()
+    else:
+        _reset_process_memory_failures()
+    return retry_code
+
+
 async def _validate_output(output: Path, log: Path, on_heartbeat=None) -> dict:
     if not output.exists() or output.stat().st_size == 0:
         raise ValueError("render produced no output")
@@ -714,7 +810,7 @@ async def _validate_output(output: Path, log: Path, on_heartbeat=None) -> dict:
     streams = metadata.get("streams", [])
     if not any(s.get("codec_type") == "video" for s in streams):
         raise ValueError("output has no video stream")
-    decode_code = await _run_process([
+    decode_code = await _run_ffmpeg_with_memory_retry([
         _tool_path("ffmpeg") or "ffmpeg", "-v", "error", "-i", str(output),
         "-f", "null", "-"], log, on_heartbeat=on_heartbeat)
     if decode_code:
@@ -757,12 +853,22 @@ async def _render(job: dict) -> None:
                     raise ValueError(f"{step['tool']} is not installed")
                 args = [_resolve_arg(arg, assets, work, output, encoder) for arg in step["args"]]
                 log_start = log.stat().st_size if log.exists() else 0
-                code = await _run_process([tool, *args], log, on_heartbeat=heartbeat)
+                if encoder == "h264_videotoolbox" and step["tool"] == "ffmpeg":
+                    code = await _run_process(
+                        [tool, *args], log, on_heartbeat=heartbeat)
+                elif step["tool"] == "ffmpeg":
+                    code = await _run_ffmpeg_with_memory_retry(
+                        [tool, *args], log, on_heartbeat=heartbeat,
+                        cleanup_path=output)
+                else:
+                    code = await _run_process(
+                        [tool, *args], log, on_heartbeat=heartbeat)
                 if code and encoder == "h264_videotoolbox" and step["tool"] == "ffmpeg":
                     fallback = [_resolve_arg(arg, assets, work, output, "libx264")
                                 for arg in step["args"]]
-                    code = await _run_process(
-                        [tool, *fallback], log, on_heartbeat=heartbeat)
+                    code = await _run_ffmpeg_with_memory_retry(
+                        [tool, *fallback], log, on_heartbeat=heartbeat,
+                        cleanup_path=output)
                     if code == 0:
                         encoder = "libx264"
                 if code:
@@ -810,7 +916,11 @@ def health():
             "queue_depth": sum(1 for j in jobs.values() if j["state"] == "queued"),
             "videotoolbox": _has_videotoolbox(),
             "started_at": PROCESS_STARTED_AT,
-            "uptime_seconds": round(time.time() - PROCESS_STARTED_AT), **hardware}
+            "uptime_seconds": round(time.time() - PROCESS_STARTED_AT),
+            "memory": _memory_snapshot(),
+            "memory_recovery": _memory_recovery_status(),
+            "restart_health": restart_rate_snapshot(),
+            **hardware}
 
 
 @app.get("/api/version")

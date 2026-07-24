@@ -33,7 +33,7 @@ The Studio Hub address defaults to `http://127.0.0.1:47873`. Set it to the LAN
 or Tailscale address of the scheduling Hub when the worker uses a remote Hub.
 The dashboard also controls automatic local-backup cleanup, the verified-copy
 retention period, an 80 GB default hard cap, and the minimum free disk reserve.
-The default retention is three days.
+The default retention is 30 days.
 
 The header shows the exact installed release and opens **What's New**. The
 **Automatic updates** card provides independent Off (default), Notify only, and
@@ -57,6 +57,13 @@ version and answer healthy before the Hub advances to the next app.
   12-hour default runtime ceiling. Timeout and cancellation first terminate,
   then force-kill if necessary, and always reap the process before partial
   output cleanup continues.
+- An explicit FFmpeg allocator/OOM failure cleans a newly created incomplete
+  output and retries that child process once. Render Studio itself stays alive;
+  unrelated render errors are not retried as memory failures.
+- The startup-service watchdog remains the only parent restart mechanism and
+  requires three consecutive failed health probes. Memory and restart-rate
+  evidence is exposed without prompts, local paths, job IDs, or generated
+  content so Studio Hub can alert operators safely.
 - Retention cleanup starts only after the main machine acknowledges receipt.
 - The hourly hard-cap sweep also deletes only acknowledged, unpinned completed
   renders, oldest first. Active, pinned, and not-yet-returned work is protected.
@@ -74,9 +81,10 @@ out-of-range values fall back to, or are clamped within, those safety bounds.
 ## API
 
 `GET /api/health` reports availability, application version, hardware score,
-encoder support, queue depth, and service uptime. `GET /api/version` exposes the
-same root release version to Studio Hub. `GET /api/update-status` performs a
-non-blocking published-version check. `GET /api/dashboard` returns sanitized
+encoder support, queue depth, service uptime, current memory, bounded memory
+recovery state, and watchdog restart-rate health. `GET /api/version` exposes
+the same root release version to Studio Hub. `GET /api/update-status` performs
+a non-blocking published-version check. `GET /api/dashboard` returns sanitized
 work history, lifetime totals, storage, connection state, and settings.
 `GET /api/catalog` advertises `episode-assembly-v1`.
 

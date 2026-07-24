@@ -1,5 +1,21 @@
 # Render Studio KH Changelog
 
+## 0.7.6 - 2026-07-24
+
+- Added strict FFmpeg memory-allocation detection and one bounded retry of the
+  failed child process. A newly created incomplete output is removed before
+  retry, while timeouts, cancellations, validation failures, network errors,
+  and other unrelated failures keep their existing behavior.
+- Kept the Render Studio server and ordered queue alive during FFmpeg memory
+  recovery. The existing service watchdog remains the only parent restart
+  mechanism and still requires three consecutive failed health probes.
+- Added privacy-safe current-memory, memory-recovery, and watchdog restart-rate
+  telemetry to `/api/health` so Studio Hub can alert on repeated failures
+  without collecting customer prompts, paths, job IDs, or generated content.
+- Added regression coverage for strict OOM classification, exactly-one retry,
+  partial-output cleanup, no retry for ordinary FFmpeg errors, no memory-driven
+  parent restart, telemetry privacy, and repeated-restart alerts.
+
 ## 0.7.5 - 2026-07-23
 
 - Raised verified render-copy retention from 3 days to 30 days while preserving
