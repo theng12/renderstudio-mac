@@ -1,5 +1,17 @@
 # Render Studio KH Changelog
 
+## 0.7.7 - 2026-07-24
+
+- One-click Update now resolves this app's `start.js` to its canonical absolute
+  path before calling Pinokio's `script.stop` API. Pinokio 8.0.40 no longer
+  receives the rejected bare relative URI that could crash its interface with
+  an unhandled rejection.
+- Startup-service behavior, FFmpeg dependencies, render queues, and active jobs
+  are otherwise unchanged.
+- Added launcher contract coverage for the canonical stop URI. Node syntax,
+  release metadata, backend compilation, and the complete test suite pass.
+  **Just run Update.**
+
 ## 0.7.6 - 2026-07-24
 
 - Added strict FFmpeg memory-allocation detection and one bounded retry of the

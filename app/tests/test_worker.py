@@ -351,6 +351,17 @@ def test_current_release_is_in_changelog_and_whats_new(worker):
     assert f">{expected} /" in html
 
 
+def test_launcher_stop_uses_canonical_app_local_uri(worker):
+    root = Path(worker.__file__).parents[2]
+    source = (root / "update.js").read_text()
+
+    assert 'uri: "{{path.resolve(cwd, \'start.js\')}}"' in source
+    assert not re.search(
+        r'method:\s*"script\.stop",\s*params:\s*\{\s*uri:\s*"start\.js"',
+        source,
+    )
+
+
 def test_update_status_compares_semantic_versions(worker, monkeypatch):
     monkeypatch.setattr(worker, "_schedule_update_check", lambda: None)
     worker.update_state.update(latest="99.0.0", checking=False)
